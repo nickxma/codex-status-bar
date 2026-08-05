@@ -253,7 +253,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var installPromptVisible = false
 
     var pollTimer: Timer?
-    var animTimer: Timer?
+    let desktopMonitor = DesktopSessionMonitor()
 
     let launchedAt = Date()
     var notNeededSince: Date?
@@ -266,7 +266,6 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     struct Session {
         var id: String, state: String, label: String, project: String, transcript: String, turnID: String
-        var animation: PetAnimation
         var cwd: String         // session working directory; "" on pre-upgrade files
         var entrypoint: String  // reliable surface hint when Codex exposes one
         var termProgram: String // TERM_PROGRAM for CLI sessions: "Apple_Terminal", "iTerm.app", …
@@ -282,8 +281,6 @@ final class StatusController: NSObject, NSMenuDelegate {
             self.id = id
             self.state = o["state"] as? String ?? "idle"
             self.label = o["label"] as? String ?? ""
-            self.animation = (o["animation"] as? String).flatMap(PetAnimation.init(rawValue:))
-                ?? PetAnimation.fallback(state: self.state, label: self.label)
             self.project = o["project"] as? String ?? ""
             self.transcript = o["transcript"] as? String ?? ""
             self.turnID = o["turnId"] as? String ?? ""
@@ -298,34 +295,49 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
     var sessions: [String: Session] = [:]  // id -> latest parsed per-session state
     var fileMTimes: [String: Date] = [:]   // "<id>.json" -> last-parsed mtime (re-parse only on change)
+    var previousState: [String: String] = [:]
+    var turnStart: [String: Double] = [:]
+    var thinkingWordBySession: [String: String] = [:]
+    var abortCache: [String: (modified: Date, aborted: Bool)] = [:]
     var menuIsOpen = false                  // refresh the dropdown's per-session timers only while open
     var sessionMenuItems: [(item: NSMenuItem, id: String)] = []
     var activeBase = ""        // label without the elapsed clock
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
-    var activeAnimation = PetAnimation.idle
-    var animationStartedAt: Double = Date().timeIntervalSince1970
-    var activeDotColor: NSColor?
-
+    var renderedDotKey = "unset"
+    var renderedTitle = "\u{0}"
+    var nextLifecycleCheck: TimeInterval = 0
     let amber = NSColor(srgbRed: 0.95, green: 0.73, blue: 0.18, alpha: 1) // "awaiting permission" yellow dot
-    var animateIcon = true
+    let claudeOrange = NSColor(srgbRed: 0.851, green: 0.467, blue: 0.341, alpha: 1)
+    var showThinkingWords = true
     var showTimer = false
-    var petDisplaySize = PetDisplaySize.normal
-    let fps: Double = 20
+    var soundThreshold: Double = 0.1
+    let thinkingWords = [
+        "Boondoggling", "Booping", "Bootstrapping", "Brewing", "Burrowing",
+        "Calculating", "Churning", "Coalescing", "Cogitating", "Combobulating",
+        "Composing", "Computing", "Cooking", "Crafting", "Creating", "Crunching",
+        "Crystallizing", "Cultivating", "Deciphering", "Percolating", "Perusing",
+        "Pollinating", "Pondering", "Pontificating", "Ruminating", "Scampering",
+        "Schlepping", "Synthesizing", "Tempering", "Thinking", "Tinkering",
+        "Whirring", "Whisking", "Wibbling", "Working", "Wrangling", "Zesting"
+    ]
+    lazy var completionSound: NSSound? = {
+        guard let path = Bundle.main.path(forResource: "completion", ofType: "mp3"),
+              let sound = NSSound(contentsOfFile: path, byReference: true) else { return nil }
+        sound.volume = 0.7
+        return sound
+    }()
 
     override init() {
         super.init()
         let d = UserDefaults.standard
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
-        if d.object(forKey: "animateIcon") != nil { animateIcon = d.bool(forKey: "animateIcon") }
-        if d.object(forKey: "petIconSize") != nil {
-            petDisplaySize = PetDisplaySize.from(persistedPoints: d.integer(forKey: "petIconSize"))
-        }
+        if d.object(forKey: "showThinkingWords") != nil { showThinkingWords = d.bool(forKey: "showThinkingWords") }
+        if d.object(forKey: "soundThreshold") != nil { soundThreshold = d.double(forKey: "soundThreshold") }
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
-        render(label: "", animation: .idle, labelStartedAt: 0,
-               animationStartedAt: launchedAt.timeIntervalSince1970)
-        let t = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in self?.tick() }
+        render(label: "", labelStartedAt: 0)
+        let t = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
         tick()
@@ -335,8 +347,6 @@ final class StatusController: NSObject, NSMenuDelegate {
     var currentVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
 
     var hooksURL: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/hooks.json") }
-    var codexConfigURL: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/config.toml") }
-    var petsURL: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/pets", isDirectory: true) }
     var hookHelperPath: String? { Bundle.main.path(forResource: "CodexStatusHook", ofType: nil) }
     var hooksAreInstalled: Bool {
         guard let data = try? Data(contentsOf: hooksURL) else { return false }
@@ -452,12 +462,22 @@ final class StatusController: NSObject, NSMenuDelegate {
         // so they surface the moment they start. Any active state counts as started too (and covers
         // pre-upgrade files with no flag).
         let allOrdered = sessions.values.sorted { $0.ts > $1.ts }   // most-recent first
-        let ordered = allOrdered.filter { s in
+        let eligible = allOrdered.filter { s in
                 let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
                 let resting = !(eff == "permission" || StatusPolicy.isWorking(eff))
                 let gated = s.entrypoint == "codex-desktop"   // only the desktop app is gated
                 return !gated || s.started || !resting
             }
+        // Keep every active session, but collapse completed/idle history to the newest row per
+        // workspace and surface. Codex Desktop creates a rollout per conversation; without this,
+        // several old conversations in one repo produce a wall of identical resting rows.
+        var restingKeys = Set<String>()
+        let ordered = eligible.filter { s in
+            let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
+            guard !(eff == "permission" || StatusPolicy.isWorking(eff)) else { return true }
+            let location = s.cwd.isEmpty ? s.project : s.cwd
+            return restingKeys.insert(s.entrypoint + "|" + location).inserted
+        }
         // Hide rows idle past the threshold, but ALWAYS keep the most-recent started session (floor at
         // one) so the dropdown never goes empty while a session is alive. Hiding is render-only; the file
         // (and thus liveness) is untouched — see stalePruneAge and the pid-driven reap in evaluate().
@@ -497,47 +517,22 @@ final class StatusController: NSObject, NSMenuDelegate {
             UserDefaults.standard.set(on, forKey: "showTimer")
             self?.applyTitle()
         })
-        menu.addItem(toggleRow(title: "Animate pet", isOn: animateIcon) { [weak self] on in
-            self?.animateIcon = on
-            UserDefaults.standard.set(on, forKey: "animateIcon")
-            self?.animTimer?.invalidate(); self?.animTimer = nil
-            self?.evaluate()
+        menu.addItem(toggleRow(title: "Thinking words", isOn: showThinkingWords) { [weak self] on in
+            self?.showThinkingWords = on
+            UserDefaults.standard.set(on, forKey: "showThinkingWords")
+            self?.applyTitle()
         })
-
-        let petItem = NSMenuItem(title: "Pet", action: nil, keyEquivalent: "")
-        let petMenu = NSMenu()
-        let pets = availablePets()
-        if pets.isEmpty {
-            let empty = NSMenuItem(title: "No local pets found", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            petMenu.addItem(empty)
-        } else {
-            for pet in pets {
-                let item = NSMenuItem(title: pet.displayName, action: #selector(selectPet(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = pet.id
-                item.state = pet.id == selectedPet?.id ? .on : .off
-                petMenu.addItem(item)
-            }
-        }
-        petItem.submenu = petMenu
-        menu.addItem(petItem)
-
-        let petSizeItem = NSMenuItem(title: "Pet size", action: nil, keyEquivalent: "")
-        let petSizeMenu = NSMenu()
-        for size in PetDisplaySize.allCases {
-            let item = NSMenuItem(title: size.title, action: #selector(selectPetSize(_:)), keyEquivalent: "")
+        let soundItem = NSMenuItem(title: "Completion Sound", action: nil, keyEquivalent: "")
+        let soundMenu = NSMenu()
+        for (seconds, title) in [(0.0, "Off"), (0.1, "Every turn"), (60.0, "1 min+"), (300.0, "5 min+"), (900.0, "15 min+")] {
+            let item = NSMenuItem(title: title, action: #selector(chooseSound(_:)), keyEquivalent: "")
             item.target = self
-            item.representedObject = size.rawValue
-            item.state = size == petDisplaySize ? .on : .off
-            petSizeMenu.addItem(item)
+            item.representedObject = NSNumber(value: seconds)
+            item.state = soundThreshold == seconds ? .on : .off
+            soundMenu.addItem(item)
         }
-        petSizeItem.submenu = petSizeMenu
-        menu.addItem(petSizeItem)
-
-        let reloadPetItem = NSMenuItem(title: "Reload pet", action: #selector(reloadPet), keyEquivalent: "")
-        reloadPetItem.target = self
-        menu.addItem(reloadPetItem)
+        soundItem.submenu = soundMenu
+        menu.addItem(soundItem)
 
         menu.addItem(.separator())
         let hooksItem = NSMenuItem(title: hooksAreInstalled ? "Reinstall Hooks…" : "Install Hooks…", action: #selector(installHooks), keyEquivalent: "")
@@ -656,7 +651,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     func statusText(_ s: Session, eff: String) -> String {
         switch eff {
         case "permission":       return "Awaiting permission"
-        case "thinking", "tool", "subagent": return StatusPolicy.displayLabel(state: s.state, storedLabel: s.label)
+        case "thinking", "tool", "subagent": return (thinkingWordBySession[s.id] ?? "Thinking") + "…"
         default:                 return s.state == "done" ? "Done" : "Idle"
         }
     }
@@ -756,46 +751,10 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     @objc func quit() { NSApp.terminate(nil) }
 
-    @objc func selectPet(_ sender: NSMenuItem) {
-        guard let petID = sender.representedObject as? String else { return }
-        let config = (try? String(contentsOf: codexConfigURL, encoding: .utf8)) ?? ""
-        guard let updated = PetAssetLocator.configSelectingPet(configText: config, petID: petID) else {
-            showPetError("The selected pet could not be written to \(codexConfigURL.path).")
-            return
-        }
-        do {
-            let permissions = (try? FileManager.default.attributesOfItem(atPath: codexConfigURL.path)[.posixPermissions]) as? NSNumber
-            try FileManager.default.createDirectory(at: codexConfigURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try updated.write(to: codexConfigURL, atomically: true, encoding: .utf8)
-            if let permissions {
-                try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: codexConfigURL.path)
-            }
-            selectedPet = loadSelectedPet()
-            evaluate()
-        } catch {
-            showPetError("Codex Status Bar could not save your pet selection. \(error.localizedDescription)")
-        }
-    }
-
-    @objc func selectPetSize(_ sender: NSMenuItem) {
-        guard let points = sender.representedObject as? Int else { return }
-        petDisplaySize = PetDisplaySize.from(persistedPoints: points)
-        UserDefaults.standard.set(petDisplaySize.points, forKey: "petIconSize")
-        evaluate()
-    }
-
-    @objc func reloadPet() {
-        selectedPet = loadSelectedPet()
-        evaluate()
-    }
-
-    func showPetError(_ message: String) {
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Pet update failed"
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+    @objc func chooseSound(_ sender: NSMenuItem) {
+        guard let number = sender.representedObject as? NSNumber else { return }
+        soundThreshold = number.doubleValue
+        UserDefaults.standard.set(soundThreshold, forKey: "soundThreshold")
     }
 
     @objc func openCodex() {
@@ -828,7 +787,12 @@ final class StatusController: NSObject, NSMenuDelegate {
     // MARK: state polling
 
     func tick() {
-        checkLifecycle()
+        let now = Date().timeIntervalSince1970
+        if now >= nextLifecycleCheck {
+            nextLifecycleCheck = now + 1
+            checkLifecycle()
+        }
+        desktopMonitor.poll()
         reloadSessions()
         evaluate()
         if menuIsOpen { refreshOpenMenuRows() }
@@ -865,6 +829,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func evaluate() {
         let now = Date().timeIntervalSince1970
+        var shouldChime = false
 
         for id in Array(sessions.keys) {
             guard var s = sessions[id] else { continue }
@@ -877,11 +842,35 @@ final class StatusController: NSObject, NSMenuDelegate {
                 : (s.eff == "idle" && stalePruneAge > 0 && now - s.ts > stalePruneAge))
             if dead {
                 try? FileManager.default.removeItem(atPath: (stateDir as NSString).appendingPathComponent(id + ".json"))
-                sessions[id] = nil; fileMTimes[id + ".json"] = nil
+                sessions[id] = nil; fileMTimes[id + ".json"] = nil; previousState[id] = nil
+                turnStart[id] = nil; thinkingWordBySession[id] = nil
                 continue
             }
             sessions[id] = s
+            let prior = previousState[id] ?? ""
+            if StatusPolicy.isWorking(s.state), s.startedAt > 0 {
+                turnStart[id] = s.startedAt
+                if !StatusPolicy.isWorking(prior) {
+                    thinkingWordBySession[id] = thinkingWords.randomElement() ?? "Thinking"
+                }
+            }
+            if soundThreshold > 0, s.state == "done", prior != "done" {
+                if let started = turnStart[id], started > 0, now - started >= soundThreshold {
+                    shouldChime = true
+                } else if s.entrypoint == "codex-desktop" {
+                    // Desktop currently exposes a reliable turn-ended notification but not the
+                    // matching prompt-start hook. The notification itself is authoritative, so
+                    // "Every turn" still works; duration thresholds remain CLI-only.
+                    shouldChime = soundThreshold <= 0.1
+                }
+            }
+            if s.state == "done" { turnStart[id] = 0 }
+            previousState[id] = s.state
         }
+        for id in Array(previousState.keys) where sessions[id] == nil {
+            previousState[id] = nil; turnStart[id] = nil; thinkingWordBySession[id] = nil
+        }
+        if shouldChime { completionSound?.play() }
 
         // Same-named projects (two clones/worktrees of one repo) get a parent-folder qualifier
         // ("work/myrepo" vs "tmp/myrepo") so their rows stay tellable apart. Runs after the reap so
@@ -913,22 +902,18 @@ final class StatusController: NSObject, NSMenuDelegate {
         guard let lead = lead else { renderResting(); return }
         switch lead.eff {
         case "permission":
-            render(label: statusText(lead, eff: lead.eff), animation: .waiting, labelStartedAt: 0,
-                   animationStartedAt: lead.ts, dotColor: amber)
+            render(label: statusText(lead, eff: lead.eff), labelStartedAt: 0, dotColor: amber)
         case "thinking", "tool", "subagent":
-            render(label: statusText(lead, eff: lead.eff), animation: lead.animation,
-                   labelStartedAt: lead.startedAt, animationStartedAt: lead.ts)
+            render(label: statusText(lead, eff: lead.eff), labelStartedAt: lead.startedAt)
         case "done":
-            render(label: statusText(lead, eff: lead.eff), animation: .jump,
-                   labelStartedAt: 0, animationStartedAt: lead.ts)
+            render(label: statusText(lead, eff: lead.eff), labelStartedAt: 0)
         default:
             renderResting()
         }
     }
 
     func renderResting() {
-        render(label: "", animation: .idle, labelStartedAt: 0,
-               animationStartedAt: launchedAt.timeIntervalSince1970)
+        render(label: "", labelStartedAt: 0)
     }
 
     // Per-session effective state with an age cap so a missed event cannot animate forever.
@@ -936,7 +921,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         if StatusPolicy.isWorking(s.state) || s.state == "permission" {
             let cap: Double = s.state == "permission" ? 7200 : 900
             if now - s.ts > cap { return "idle" }
-            if turnWasAborted(transcriptPath: s.transcript, turnID: s.turnID) { return "idle" }
+            if s.entrypoint != "codex-desktop",
+               turnWasAborted(transcriptPath: s.transcript, turnID: s.turnID) { return "idle" }
             return s.state
         }
         return StatusPolicy.effectiveState(rawState: s.state, age: max(0, now - s.ts))
@@ -944,13 +930,19 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func turnWasAborted(transcriptPath: String, turnID: String) -> Bool {
         guard !transcriptPath.isEmpty, !turnID.isEmpty,
-              let handle = FileHandle(forReadingAtPath: transcriptPath) else { return false }
+              let modified = (try? FileManager.default.attributesOfItem(atPath: transcriptPath)[.modificationDate]) as? Date
+        else { return false }
+        let cacheKey = transcriptPath + "|" + turnID
+        if let cached = abortCache[cacheKey], cached.modified == modified { return cached.aborted }
+        guard let handle = FileHandle(forReadingAtPath: transcriptPath) else { return false }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
         let window: UInt64 = 32 * 1024
         try? handle.seek(toOffset: size > window ? size - window : 0)
         guard let data = try? handle.readToEnd() else { return false }
-        return StatusPolicy.turnWasAborted(in: data, turnID: turnID)
+        let aborted = StatusPolicy.turnWasAborted(in: data, turnID: turnID)
+        abortCache[cacheKey] = (modified, aborted)
+        return aborted
     }
 
 
@@ -988,48 +980,28 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     // MARK: render
 
-    func render(label: String, animation: PetAnimation, labelStartedAt: Double,
-                animationStartedAt: Double, dotColor: NSColor? = nil) {
+    func render(label: String, labelStartedAt: Double, dotColor: NSColor? = nil) {
         guard let button = statusItem.button else { return }
-        button.contentTintColor = nil // we paint the icon color ourselves; template-tint is unreliable
         activeBase = label
-        activeAnimation = animation
-        self.animationStartedAt = animationStartedAt
-        activeDotColor = dotColor
         startedAt = labelStartedAt
-
-        let shouldAnimate = StatusPolicy.shouldAnimate(
-            userEnabled: animateIcon,
-            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        )
-        if shouldAnimate {
-            if animTimer == nil {
-                let t = Timer(timeInterval: 1.0 / fps, repeats: true) { [weak self] _ in self?.animStep() }
-                RunLoop.main.add(t, forMode: .common)
-                animTimer = t
-            }
-            animStep()
-        } else {
-            animTimer?.invalidate(); animTimer = nil
-            button.image = petIcon(animation: animation, column: 0, dotColor: dotColor)
+        let dotKey = dotColor == nil ? "none" : "permission"
+        if renderedDotKey != dotKey {
+            button.contentTintColor = nil // we paint the icon color ourselves; template-tint is unreliable
+            button.image = statusIcon(dotColor: dotColor)
+            renderedDotKey = dotKey
+            if button.image == nil { button.image = fallbackIcon() }
         }
         applyTitle()
-        if button.image == nil { button.image = fallbackIcon() }
-    }
-
-    func animStep() {
-        let elapsed = max(0, Int((Date().timeIntervalSince1970 - animationStartedAt) * 1000))
-        let column = activeAnimation.column(atMilliseconds: elapsed)
-        statusItem.button?.image = petIcon(animation: activeAnimation, column: column, dotColor: activeDotColor)
-        applyTitle() // refresh the elapsed clock
     }
 
     func applyTitle() {
         guard let button = statusItem.button else { return }
-        var text = activeBase
+        var text = showThinkingWords ? activeBase : ""
         if showTimer, startedAt > 0 {
             text += "  " + elapsed(max(0, Int(Date().timeIntervalSince1970 - startedAt)))
         }
+        guard text != renderedTitle else { return }
+        renderedTitle = text
         if text.isEmpty {
             button.imagePosition = .imageOnly
             button.attributedTitle = NSAttributedString(string: "")
@@ -1040,95 +1012,41 @@ final class StatusController: NSObject, NSMenuDelegate {
         // digits keep the elapsed clock from nudging neighboring menu bar icons.
         let attrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: NSColor.labelColor,
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 0, weight: .regular),
+            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular),
         ]
         button.attributedTitle = NSAttributedString(string: " \(text)", attributes: attrs)
     }
 
     // MARK: icon
 
-    struct LocalPet {
-        let id: String
-        let displayName: String
-    }
-
-    struct LoadedPet {
-        let id: String
-        let image: NSImage
-        let layout: PetAtlasLayout
-    }
-
-    lazy var selectedPet: LoadedPet? = loadSelectedPet()
-
     lazy var fallbackMark: NSImage = {
-        if let path = Bundle.main.path(forResource: "CodexPet", ofType: "png"),
-           let image = NSImage(contentsOfFile: path) { return image }
         return NSImage(systemSymbolName: "chevron.left.forwardslash.chevron.right", accessibilityDescription: "Codex")
             ?? NSImage(size: NSSize(width: 18, height: 18))
     }()
 
-    func petIcon(animation: PetAnimation, column: Int, dotColor: NSColor?) -> NSImage {
-        let frame = petFrame(row: animation.spec.row, column: column) ?? fallbackIcon()
+    lazy var claudeSparkMark: NSImage? = Data(base64Encoded: claudeLogoPNG).flatMap(NSImage.init(data:))
+
+    func statusIcon(dotColor: NSColor?) -> NSImage {
+        let frame = claudeSparkIcon()
         guard let dotColor else { return frame }
         return dotIcon(base: frame, color: dotColor)
     }
 
-    func availablePets() -> [LocalPet] {
-        let ids = (try? FileManager.default.contentsOfDirectory(atPath: petsURL.path)) ?? []
-        return ids.compactMap { id in
-            guard PetAssetLocator.isSafePetID(id) else { return nil }
-            let directory = petsURL.appendingPathComponent(id, isDirectory: true)
-            let manifestURL = directory.appendingPathComponent("pet.json")
-            guard let data = try? Data(contentsOf: manifestURL),
-                  let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let relativePath = manifest["spritesheetPath"] as? String,
-                  FileManager.default.fileExists(atPath: directory.appendingPathComponent(relativePath).path) else { return nil }
-            let displayName = (manifest["displayName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return LocalPet(id: id, displayName: displayName.isEmpty ? id : displayName)
-        }.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-    }
-
-    func loadSelectedPet() -> LoadedPet? {
-        let config = (try? String(contentsOf: codexConfigURL, encoding: .utf8)) ?? ""
-        var petID = PetAssetLocator.selectedPetID(configText: config)
-        if petID == nil {
-            petID = (try? FileManager.default.contentsOfDirectory(atPath: petsURL.path))?
-                .sorted().first { FileManager.default.fileExists(atPath: petsURL.appendingPathComponent($0).appendingPathComponent("pet.json").path) }
-        }
-        guard let petID else { return nil }
-        let directory = petsURL.appendingPathComponent(petID, isDirectory: true)
-        let manifestURL = directory.appendingPathComponent("pet.json")
-        guard let data = try? Data(contentsOf: manifestURL),
-              let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let relativePath = manifest["spritesheetPath"] as? String,
-              let image = NSImage(contentsOf: directory.appendingPathComponent(relativePath)),
-              let representation = image.representations.max(by: { $0.pixelsWide < $1.pixelsWide }),
-              let layout = PetAtlasLayout(width: representation.pixelsWide, height: representation.pixelsHigh) else { return nil }
-        return LoadedPet(id: petID, image: image, layout: layout)
-    }
-
-    func petFrame(row: Int, column: Int) -> NSImage? {
-        guard let pet = selectedPet, row >= 0, row < pet.layout.rows,
-              column >= 0, column < pet.layout.columns else { return nil }
-        let pixelRect = pet.layout.sourceRect(row: row, column: column)
-        let scaleX = pet.image.size.width / CGFloat(pet.layout.width)
-        let scaleY = pet.image.size.height / CGFloat(pet.layout.height)
-        let sourceRect = NSRect(x: pixelRect.origin.x * scaleX, y: pixelRect.origin.y * scaleY,
-                                width: pixelRect.width * scaleX, height: pixelRect.height * scaleY)
-        let side = CGFloat(petDisplaySize.points)
-        let drawHeight = side
-        let drawWidth = drawHeight * CGFloat(pet.layout.cellWidth) / CGFloat(pet.layout.cellHeight)
-        let frame = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
-            pet.image.draw(in: NSRect(x: (side - drawWidth) / 2, y: 0, width: drawWidth, height: drawHeight),
-                           from: sourceRect, operation: .sourceOver, fraction: 1)
+    func claudeSparkIcon() -> NSImage {
+        let side: CGFloat = 20
+        guard let mask = claudeSparkMark else { return fallbackIcon() }
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            self.claudeOrange.setFill()
+            rect.fill()
+            mask.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1)
             return true
         }
-        frame.isTemplate = false
-        return frame
+        image.isTemplate = false
+        return image
     }
 
     func fallbackIcon() -> NSImage {
-        let side = CGFloat(petDisplaySize.points)
+        let side: CGFloat = 20
         let inset = max(1, side * 0.05)
         return NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
             self.fallbackMark.draw(in: rect.insetBy(dx: inset, dy: inset), from: .zero, operation: .sourceOver, fraction: 1)
@@ -1137,7 +1055,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     func dotIcon(base: NSImage, color: NSColor) -> NSImage {
-        let s = CGFloat(petDisplaySize.points)
+        let s: CGFloat = 20
         let d = max(4, (s * 0.3).rounded())
         let img = NSImage(size: NSSize(width: s, height: s), flipped: false) { rect in
             base.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)

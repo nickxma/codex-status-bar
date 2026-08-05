@@ -32,7 +32,7 @@ guard let state = HookEventMapper.update(
     payload: enriched,
     event: event,
     previous: previous,
-    pid: getppid(),
+    pid: environment["CODEX_STATUSBAR_HOST_PID"].flatMap(Int32.init) ?? getppid(),
     now: Date().timeIntervalSince1970
 ) else { exit(0) }
 
@@ -59,7 +59,7 @@ if lockDescriptor >= 0 {
 if event == "SessionStart", environment["CODEX_STATUSBAR_NO_LAUNCH"] != "1" {
     let task = Process()
     task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    task.arguments = ["-g", "-b", "com.local.codexstatusbar"]
+    task.arguments = ["-g", "-b", "com.nickxma.codexstatusbar"]
     try? task.run()
 }
 

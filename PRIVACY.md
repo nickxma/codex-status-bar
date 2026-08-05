@@ -2,8 +2,8 @@
 
 Codex Status Bar runs locally and collects no telemetry.
 
-The hook helper receives Codex's documented hook metadata and stores status, timestamps, project directory, model identifier, tool name, surface, process identifiers, active subagent identifiers, current turn ID, and session-file path under `~/.codex/statusbar/state.d`. The app reads at most the final 32 KB of the active local session file and inspects only JSON event envelopes for a matching `turn_aborted` event so Esc clears working state immediately. It never reads message content or subagent messages.
+The CLI hook helper receives Codex's documented hook metadata and stores status, timestamps, project directory, model identifier, tool name, surface, process identifiers, active subagent identifiers, current turn ID, and session-file path under `~/.codex/statusbar/state.d`.
+
+For Codex Desktop, the app watches recently active JSONL files under `~/.codex/sessions`. It parses only session metadata and structured lifecycle envelopes such as `task_started`, tool-call type, `task_complete`, `task_cancelled`, and `turn_aborted`. It does not access user or assistant message bodies. Filesystem events wake the monitor when a session changes; it does not continuously rescan or upload the session tree.
 
 The app makes no network requests. It modifies `~/.codex/hooks.json` only after explicit confirmation and creates at most one backup named `hooks.json.bak-codex-statusbar`.
-
-The app reads `selected-avatar-id` from `~/.codex/config.toml` and the selected pet's `pet.json` plus spritesheet under `~/.codex/pets` to render local status icons. Choosing a pet from the menu updates only the `selected-avatar-id` assignment in `config.toml`; unrelated settings and comments are preserved.

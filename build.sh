@@ -10,21 +10,31 @@ HOOK="$APP/Contents/Resources/CodexStatusHook"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 
-echo "Compiling universal binary (arm64 + x86_64)…"
-# Universal binary so it runs natively on both Apple Silicon and Intel (each Mac uses its own
-# slice, so Rosetta is never involved). swiftc emits one arch per -target, so this is two
-# compiles joined by lipo. Keep the deployment target pinned, else swiftc stamps the binary
-# with the build machine's OS and it refuses to launch on older systems despite LSMinimumSystemVersion.
-swiftc -O -target arm64-apple-macos12.0  Sources/*.swift -o "$BIN.arm64"  -framework Cocoa
-swiftc -O -target x86_64-apple-macos12.0 Sources/*.swift -o "$BIN.x86_64" -framework Cocoa
-lipo -create "$BIN.arm64" "$BIN.x86_64" -output "$BIN"
-rm -f "$BIN.arm64" "$BIN.x86_64"
+BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
+case "$BUILD_ARCH" in
+  arm64|x86_64)
+    echo "Compiling native $BUILD_ARCH binary…"
+    swiftc -O -target "$BUILD_ARCH-apple-macos12.0" Sources/*.swift -o "$BIN" -framework Cocoa
+    ;;
+  universal)
+    echo "Compiling universal binary (arm64 + x86_64)…"
+    swiftc -O -target arm64-apple-macos12.0  Sources/*.swift -o "$BIN.arm64"  -framework Cocoa
+    swiftc -O -target x86_64-apple-macos12.0 Sources/*.swift -o "$BIN.x86_64" -framework Cocoa
+    lipo -create "$BIN.arm64" "$BIN.x86_64" -output "$BIN"
+    rm -f "$BIN.arm64" "$BIN.x86_64"
+    ;;
+  *) echo "Unsupported BUILD_ARCH: $BUILD_ARCH" >&2; exit 2 ;;
+esac
 
 mkdir -p "$APP/Contents/Resources"
-swiftc -O -target arm64-apple-macos12.0 Sources/HookCore.swift HookHelper/main.swift -o "$HOOK.arm64"
-swiftc -O -target x86_64-apple-macos12.0 Sources/HookCore.swift HookHelper/main.swift -o "$HOOK.x86_64"
-lipo -create "$HOOK.arm64" "$HOOK.x86_64" -output "$HOOK"
-rm -f "$HOOK.arm64" "$HOOK.x86_64"
+if [[ "$BUILD_ARCH" == "universal" ]]; then
+  swiftc -O -target arm64-apple-macos12.0 Sources/HookCore.swift HookHelper/main.swift -o "$HOOK.arm64"
+  swiftc -O -target x86_64-apple-macos12.0 Sources/HookCore.swift HookHelper/main.swift -o "$HOOK.x86_64"
+  lipo -create "$HOOK.arm64" "$HOOK.x86_64" -output "$HOOK"
+  rm -f "$HOOK.arm64" "$HOOK.x86_64"
+else
+  swiftc -O -target "$BUILD_ARCH-apple-macos12.0" Sources/HookCore.swift HookHelper/main.swift -o "$HOOK"
+fi
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -33,19 +43,20 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
   <key>CFBundleName</key><string>CodexStatusBar</string>
   <key>CFBundleDisplayName</key><string>Codex Status Bar</string>
-  <key>CFBundleIdentifier</key><string>com.local.codexstatusbar</string>
+  <key>CFBundleIdentifier</key><string>com.nickxma.codexstatusbar</string>
   <key>CFBundleExecutable</key><string>CodexStatusBar</string>
-  <key>CFBundleVersion</key><string>0.1.0</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>0.2.0</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>LSUIElement</key><true/>
 </dict>
 </plist>
 PLIST
 
-# Bundle the locally installed Codex pet-style app mark used by the menu bar renderer.
-cp assets/CodexPet.png "$APP/Contents/Resources/CodexPet.png"
+cp assets/completion.mp3 "$APP/Contents/Resources/completion.mp3"
+cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # --- Signing / notarization ---
 # For a clean (no Gatekeeper warning) release you need, set up once on this Mac:

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+- Added live Codex Desktop support through local lifecycle event watching.
+- Replaced recursive session polling with filesystem events for faster startup and lower idle work.
+- Added Claude-style rotating thinking words and independent timer controls.
+- Added configurable completion sounds.
+- Added the Claude spark menu-bar icon and app icon.
+- Collapsed duplicate resting Desktop sessions by workspace.
+- Removed the Codex pet picker, sprite renderer, configuration writes, animation timer, tests, and bundled pet atlas.
+- Removed the temporary Desktop completion-notification bridge and all machine-specific paths.
+- Changed the release bundle identifier to `com.nickxma.codexstatusbar`.
+
 ## 0.1.0
 
 - Forked the original Claude Status Bar architecture for Codex.

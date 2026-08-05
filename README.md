@@ -2,19 +2,18 @@
 
 A tiny native macOS menu-bar app that shows live Codex task state across Codex CLI and Codex Desktop.
 
-It uses Codex's documented lifecycle hooks to show when Codex is thinking, using a tool, herding subagents, waiting for permission, or idle. Multiple sessions are aggregated so a permission request is never hidden behind ordinary work.
+It watches Codex Desktop's local lifecycle event stream and uses Codex's documented hooks for CLI sessions. Multiple sessions are aggregated so a permission request is never hidden behind ordinary work.
 
 ## What it shows
 
-- The selected local Codex pet from `~/.codex/pets` when idle.
-- `Thinking…` while Codex reasons, plus concise tool labels such as `Running command`, `Editing`, and `Searching`.
-- `Herding an agent…` or `Herding N agents…` while Codex delegates work.
-- The pet's native idle, directional-running, hand-motion, review, waiting, and completion animations based on the current action.
+- A rotating Claude-style thinking word while Codex works (`Pondering…`, `Brewing…`, `Tinkering…`).
+- The full elapsed time of the current turn, including thinking and tool use.
 - A yellow indicator when Codex needs permission.
-- An optional elapsed timer, a checked local-pet picker, three pet sizes, and a `Reload pet` action—all without restarting.
+- Independent **Thinking words** and **Show timer** toggles.
+- A configurable completion sound: every turn, or only turns longer than 1, 5, or 15 minutes.
 - Session rows with project, surface, and state.
 
-The app is local-only. It does not read message content, collect telemetry, use an API key, or require Node, npm, Bun, or another runtime. To recover immediately when Esc interrupts a turn, it checks only the structured event envelopes at the tail of the active local session file for Codex's `turn_aborted` marker.
+The app is local-only. It does not read message content, collect telemetry, use an API key, or require Node, npm, Bun, or another runtime. For Codex Desktop it watches file changes rather than repeatedly scanning the session tree, then inspects only lifecycle event names and session metadata.
 
 ## Build and install
 
@@ -31,9 +30,11 @@ For a DMG:
 ./build.sh --dmg
 ```
 
-On first launch, Codex Status Bar asks before changing anything. Choose **Install** to merge its commands into `~/.codex/hooks.json`. Existing hooks are preserved and the original file is backed up once.
+Builds are native to the current Mac by default. A release runner with full Xcode can produce a universal binary with `BUILD_ARCH=universal ./build.sh --dmg`.
 
-Then open `/hooks` in Codex, review the eight Codex Status Bar commands, and trust them. Codex intentionally skips new hooks until you approve their exact definitions.
+Codex Desktop works automatically. On first launch, Codex Status Bar asks whether it may add CLI hooks to `~/.codex/hooks.json`. Existing hooks are preserved and the original file is backed up once.
+
+CLI users should then open `/hooks` in Codex, review the eight Codex Status Bar commands, and trust them. Codex intentionally skips new hooks until their exact definitions are approved.
 
 ## Supported events
 
@@ -46,7 +47,7 @@ Then open `/hooks` in Codex, review the eight Codex Status Bar commands, and tru
 - `SubagentStop`
 - `Stop`
 
-CLI sessions are removed when their Codex process exits. Codex currently has no documented `SessionEnd` hook, so idle Desktop rows expire by age.
+CLI sessions are removed when their Codex process exits. Desktop sessions are discovered from `~/.codex/sessions`, updated through filesystem events, and collapsed to the latest resting row per workspace.
 
 ## Uninstall hooks
 
@@ -65,3 +66,7 @@ See [PRIVACY.md](PRIVACY.md), [TROUBLESHOOTING.md](TROUBLESHOOTING.md), and [CON
 ## License
 
 MIT
+
+## Trademark / not affiliated
+
+This is an unofficial open-source project. It is not affiliated with, endorsed by, or sponsored by OpenAI or Anthropic. Codex and OpenAI are trademarks of OpenAI. Claude and the Claude spark logo are trademarks of Anthropic. The spark is used in the same nominative, noncommercial spirit as the upstream Claude Status Bar project; the MIT license does not grant trademark rights.
