@@ -22,7 +22,7 @@ struct DesktopSessionMonitorTests {
         try Data("{\"id\":\"\(sessionID)\",\"thread_name\":\"Trace Will the Real X\"}\n".utf8).write(to: titleIndex)
         let log = day.appendingPathComponent("rollout-test-\(sessionID).jsonl")
         let initial = """
-        {"timestamp":"2026-08-05T12:00:00Z","type":"session_meta","payload":{"id":"\(sessionID)","cwd":"/tmp/example"}}
+        {"timestamp":"2026-08-05T12:00:00.123Z","type":"session_meta","payload":{"id":"\(sessionID)","cwd":"/tmp/example","thread_source":"user"}}
         {"timestamp":"2026-08-05T12:00:01Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"old-turn"}}
 
         """
@@ -43,9 +43,13 @@ struct DesktopSessionMonitorTests {
         guard readState(state)?["project"] as? String == "Trace Will the Real X" else {
             fatalError("Codex thread title was not used")
         }
+        guard readState(state)?["indexedTitle"] as? Bool == true,
+              readState(state)?["threadSource"] as? String == "user" else {
+            fatalError("user-thread metadata was not preserved")
+        }
 
         let started = Date()
-        let event = "{\"timestamp\":\"2026-08-05T12:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"new-turn\"}}\n"
+        let event = "{\"timestamp\":\"2026-08-05T12:00:02.456Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"new-turn\"}}\n"
         let handle = try FileHandle(forWritingTo: log)
         try handle.seekToEnd()
         try handle.write(contentsOf: Data(event.utf8))
@@ -58,7 +62,15 @@ struct DesktopSessionMonitorTests {
         guard let result = readState(state), result["state"] as? String == "thinking" else {
             fatalError("filesystem event did not surface task_started within 750 ms")
         }
+        let expectedFormatter = ISO8601DateFormatter()
+        expectedFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let expectedTimestamp = expectedFormatter.date(from: "2026-08-05T12:00:02.456Z")!.timeIntervalSince1970
+        guard abs((result["ts"] as? Double ?? 0) - expectedTimestamp) < 0.01 else {
+            fatalError("fractional lifecycle timestamps were not parsed")
+        }
         guard result["pid"] as? Int == 4242 else { fatalError("Desktop host PID was not preserved") }
+        guard StatusPolicy.recentSessionRetention == 900 else { fatalError("recent-session retention changed") }
+        guard StatusPolicy.maximumRecentSessions == 5 else { fatalError("recent-session cap changed") }
         let renamed = "{\"id\":\"\(sessionID)\",\"thread_name\":\"Renamed Thread\"}\n"
         try Data(renamed.utf8).write(to: titleIndex)
         let renameDeadline = Date().addingTimeInterval(0.75)

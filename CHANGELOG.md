@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- Added native launch-at-login support, enabled by default with an in-app toggle.
+- Made completion sound after every turn the explicit first-run default.
+- Defined deterministic session behavior: all active tasks plus the five most recent completed tasks for 15 minutes.
+- Removed the self-quit behavior so the login utility can detect Codex opening later.
+- Added a 12-hour active-state safety timeout for missed terminal events.
+- Fixed fractional lifecycle timestamps so relaunching cannot make old completed tasks look new.
+- Filtered internal, CLI, automation, and untitled helper sessions from the user-task list.
+- Updated installation, troubleshooting, privacy, and contribution documentation for the Desktop-only app.
+
 ## 0.3.1
 
 - Display the exact Codex task title from the local session index.

@@ -2,21 +2,15 @@
 
 ## Nothing changes while Codex works
 
-Open `/hooks` in Codex. Review and trust the Codex Status Bar commands; Codex skips untrusted hooks by design.
+Confirm that Codex Status Bar is running and that Codex Desktop has created local sessions under `~/.codex/sessions`. The app does not support Codex CLI and does not install hooks.
 
-Also check that hooks are enabled in `~/.codex/config.toml` and that `~/.codex/hooks.json` contains commands marked `codex-status-bar-hook`.
+## The app does not start after login
 
-## The helper path is wrong
-
-Moving the app after hook installation leaves the old absolute path in the hook commands. Open the status menu and choose **Reinstall Hooks…**.
-
-## The app disappears
-
-Codex Status Bar launches on `SessionStart` and quits after Codex is no longer active. Launch it manually to install or repair hooks.
+Turn **Launch at login** off and on in the menu. macOS may also show the app under **System Settings → General → Login Items**.
 
 ## Desktop rows remain longer than expected
 
-Codex does not currently expose a documented `SessionEnd` hook. Desktop sessions share a long-lived process, so idle rows expire using the app's hide-idle interval.
+Every active task remains visible. Up to five completed tasks remain for 15 minutes, after which their local status files are removed.
 
 ## Debug state
 

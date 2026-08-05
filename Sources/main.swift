@@ -1,4 +1,5 @@
 import Cocoa
+import ServiceManagement
 
 // Custom-drawn toggle. NSSwitch can't show its accent inside a menu (the menu's vibrant, non-key
 // window draws the implicit accent gray), so we render the track + knob as layers and fill the
@@ -239,19 +240,12 @@ final class StatusController: NSObject, NSMenuDelegate {
     var pollTimer: Timer?
     let desktopMonitor = DesktopSessionMonitor()
 
-    let launchedAt = Date()
-    var notNeededSince: Date?
-    let launchGrace: TimeInterval = 5   // settle time after launch before we may quit
-    let idleQuitDelay: TimeInterval = 3 // "not needed" must persist this long before quitting
-    // "Hide idle after" setting (seconds): hide a resting session's ROW once it's been quiet this long.
-    // Render-only — it never deletes the file or affects liveness (that's pid-driven now), and the
-    // most-recent session is always kept visible (floor at one). 0 = Never. Defaults to 30 min.
-    var stalePruneAge: TimeInterval { UserDefaults.standard.object(forKey: "hideIdleAfter") as? Double ?? 900 }
-
     struct Session {
         var id: String, state: String, label: String, project: String
         var cwd: String         // session working directory; "" on pre-upgrade files
         var entrypoint: String  // used to exclude stale state from older CLI-capable builds
+        var indexedTitle: Bool
+        var threadSource: String
         var started: Bool       // true once the session had real activity (a prompt/tool); a merely-opened
                                 // conversation seeds started=false and stays out of the dropdown.
         var startedAt: Double, ts: Double
@@ -266,6 +260,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             self.project = o["project"] as? String ?? ""
             self.cwd = o["cwd"] as? String ?? ""
             self.entrypoint = o["surface"] as? String ?? o["entrypoint"] as? String ?? ""
+            self.indexedTitle = o["indexedTitle"] as? Bool ?? false
+            self.threadSource = o["threadSource"] as? String ?? ""
             self.started = o["started"] as? Bool ?? false
             self.startedAt = (o["startedAt"] as? NSNumber)?.doubleValue ?? 0
             self.ts = (o["ts"] as? NSNumber)?.doubleValue ?? 0
@@ -282,12 +278,12 @@ final class StatusController: NSObject, NSMenuDelegate {
     var startedAt: Double = 0  // unix seconds the current turn began (0 = no clock)
     var renderedDotKey = "unset"
     var renderedTitle = "\u{0}"
-    var nextLifecycleCheck: TimeInterval = 0
     let amber = NSColor(srgbRed: 0.95, green: 0.73, blue: 0.18, alpha: 1) // "awaiting permission" yellow dot
     let claudeOrange = NSColor(srgbRed: 0.851, green: 0.467, blue: 0.341, alpha: 1)
     var showThinkingWords = true
     var showTimer = false
     var soundThreshold: Double = 0.1
+    var launchAtLogin = true
     let thinkingWords = [
         "Boondoggling", "Booping", "Bootstrapping", "Brewing", "Burrowing",
         "Calculating", "Churning", "Coalescing", "Cogitating", "Combobulating",
@@ -310,6 +306,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
         if d.object(forKey: "showThinkingWords") != nil { showThinkingWords = d.bool(forKey: "showThinkingWords") }
         if d.object(forKey: "soundThreshold") != nil { soundThreshold = d.double(forKey: "soundThreshold") }
+        if d.object(forKey: "launchAtLogin") != nil { launchAtLogin = d.bool(forKey: "launchAtLogin") }
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
@@ -318,6 +315,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
         tick()
+        syncLaunchAtLogin()
     }
 
     var currentVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
@@ -359,35 +357,23 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
         sessionMenuItems.removeAll()
         let now = Date().timeIntervalSince1970
-        // Opening/clicking a conversation seeds an idle session without
-        // real activity (the click-through clutter), so a desktop session stays out of the dropdown until
-        // a prompt/tool fires (started=true). Any active state counts as started too.
-        let allOrdered = sessions.values.sorted { $0.ts > $1.ts }   // most-recent first
-        let eligible = allOrdered.filter { s in
-                let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
-                let resting = !(eff == "permission" || StatusPolicy.isWorking(eff))
-                let gated = s.entrypoint == "codex-desktop"   // only the desktop app is gated
-                return !gated || s.started || !resting
-            }
-        // Keep every active session, but collapse completed/idle history to the newest row per
-        // workspace and surface. Codex Desktop creates a rollout per conversation; without this,
-        // several old conversations in one repo produce a wall of identical resting rows.
-        var restingKeys = Set<String>()
-        let ordered = eligible.filter { s in
+        // A task appears only after real activity. Keep every active task, followed by at most five
+        // tasks completed in the last 15 minutes. Opened-but-never-run conversations never appear.
+        let eligible = sessions.values.filter { s in
             let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
-            guard !(eff == "permission" || StatusPolicy.isWorking(eff)) else { return true }
-            let location = s.cwd.isEmpty ? s.project : s.cwd
-            return restingKeys.insert(s.entrypoint + "|" + location).inserted
+            return s.threadSource == "user" && s.indexedTitle
+                && (s.started || eff == "permission" || StatusPolicy.isWorking(eff))
         }
-        // Hide rows idle past the threshold, but ALWAYS keep the most-recent started session (floor at
-        // one) so the dropdown never goes empty while a session is alive. Hiding is render-only; the file
-        // (and thus liveness) is untouched — see stalePruneAge and the pid-driven reap in evaluate().
-        var visible = ordered.filter { s in
+        let active = eligible.filter { s in
             let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
-            let resting = !(eff == "permission" || StatusPolicy.isWorking(eff))
-            return !(stalePruneAge > 0 && resting && now - s.ts > stalePruneAge)
-        }
-        if visible.isEmpty, let lead = ordered.first { visible = [lead] }   // floor: never empty while alive
+            return eff == "permission" || StatusPolicy.isWorking(eff)
+        }.sorted { $0.ts > $1.ts }
+        let recent = eligible.filter { s in
+            let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
+            return eff != "permission" && !StatusPolicy.isWorking(eff)
+                && now - s.ts <= StatusPolicy.recentSessionRetention
+        }.sorted { $0.ts > $1.ts }.prefix(StatusPolicy.maximumRecentSessions)
+        let visible = active + Array(recent)
 
         if !visible.isEmpty {
             menu.addItem(header("Sessions"))
@@ -421,6 +407,9 @@ final class StatusController: NSObject, NSMenuDelegate {
             self?.showThinkingWords = on
             UserDefaults.standard.set(on, forKey: "showThinkingWords")
             self?.applyTitle()
+        })
+        menu.addItem(toggleRow(title: "Launch at login", isOn: launchAtLogin) { [weak self] on in
+            self?.setLaunchAtLogin(on)
         })
         let soundItem = NSMenuItem(title: "Completion Sound", action: nil, keyEquivalent: "")
         let soundMenu = NSMenu()
@@ -614,11 +603,6 @@ final class StatusController: NSObject, NSMenuDelegate {
     // MARK: state polling
 
     func tick() {
-        let now = Date().timeIntervalSince1970
-        if now >= nextLifecycleCheck {
-            nextLifecycleCheck = now + 1
-            checkLifecycle()
-        }
         desktopMonitor.poll()
         reloadSessions()
         evaluate()
@@ -666,7 +650,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             guard var s = sessions[id] else { continue }
             s.eff = effectiveState(s, now: now)   // compute once per tick; the menu + tooltip reuse it
             let desktopExpired = s.eff == "idle"
-                && stalePruneAge > 0 && now - s.ts > stalePruneAge
+                && now - s.ts > StatusPolicy.recentSessionRetention
             if desktopExpired {
                 try? FileManager.default.removeItem(atPath: (stateDir as NSString).appendingPathComponent(id + ".json"))
                 sessions[id] = nil; fileMTimes[id + ".json"] = nil; previousState[id] = nil
@@ -741,34 +725,32 @@ final class StatusController: NSObject, NSMenuDelegate {
     // Per-session effective state with an age cap so a missed event cannot animate forever.
     func effectiveState(_ s: Session, now: Double) -> String {
         if StatusPolicy.isWorking(s.state) || s.state == "permission" {
-            let cap: Double = s.state == "permission" ? 7200 : 900
-            if now - s.ts > cap { return "idle" }
+            if now - s.ts > StatusPolicy.activeSafetyCap { return "idle" }
             return s.state
         }
         return StatusPolicy.effectiveState(rawState: s.state, age: max(0, now - s.ts))
     }
 
-    // MARK: self-quit lifecycle
-
     func codexDesktopRunning() -> Bool {
         NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == codexDesktopBundleID }
     }
 
-    func sessionCount() -> Int { stateFileNames().count }
+    func syncLaunchAtLogin() {
+        setLaunchAtLogin(launchAtLogin, persist: false)
+    }
 
-    // Stay while Codex Desktop is open OR a session is active; otherwise quit after a
-    // short debounced grace (warmup-session churn must not kill us).
-    func checkLifecycle() {
-        let now = Date()
-        if now.timeIntervalSince(launchedAt) < launchGrace { return }
-        if codexDesktopRunning() || sessionCount() > 0 {
-            notNeededSince = nil
-            return
-        }
-        if let since = notNeededSince {
-            if now.timeIntervalSince(since) >= idleQuitDelay { NSApp.terminate(nil) }
-        } else {
-            notNeededSince = now
+    func setLaunchAtLogin(_ enabled: Bool, persist: Bool = true) {
+        do {
+            if enabled {
+                if SMAppService.mainApp.status != .enabled { try SMAppService.mainApp.register() }
+            } else if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            }
+            launchAtLogin = enabled
+            if persist { UserDefaults.standard.set(enabled, forKey: "launchAtLogin") }
+        } catch {
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            if persist { UserDefaults.standard.set(launchAtLogin, forKey: "launchAtLogin") }
         }
     }
 

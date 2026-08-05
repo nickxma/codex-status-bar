@@ -13,12 +13,12 @@ BUILD_ARCH="${BUILD_ARCH:-$(uname -m)}"
 case "$BUILD_ARCH" in
   arm64|x86_64)
     echo "Compiling native $BUILD_ARCH binary…"
-    swiftc -O -target "$BUILD_ARCH-apple-macos12.0" Sources/*.swift -o "$BIN" -framework Cocoa
+    swiftc -O -target "$BUILD_ARCH-apple-macos13.0" Sources/*.swift -o "$BIN" -framework Cocoa -framework ServiceManagement
     ;;
   universal)
     echo "Compiling universal binary (arm64 + x86_64)…"
-    swiftc -O -target arm64-apple-macos12.0  Sources/*.swift -o "$BIN.arm64"  -framework Cocoa
-    swiftc -O -target x86_64-apple-macos12.0 Sources/*.swift -o "$BIN.x86_64" -framework Cocoa
+    swiftc -O -target arm64-apple-macos13.0  Sources/*.swift -o "$BIN.arm64"  -framework Cocoa -framework ServiceManagement
+    swiftc -O -target x86_64-apple-macos13.0 Sources/*.swift -o "$BIN.x86_64" -framework Cocoa -framework ServiceManagement
     lipo -create "$BIN.arm64" "$BIN.x86_64" -output "$BIN"
     rm -f "$BIN.arm64" "$BIN.x86_64"
     ;;
@@ -36,11 +36,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Codex Status Bar</string>
   <key>CFBundleIdentifier</key><string>com.nickxma.codexstatusbar</string>
   <key>CFBundleExecutable</key><string>CodexStatusBar</string>
-  <key>CFBundleVersion</key><string>0.3.1</string>
-  <key>CFBundleShortVersionString</key><string>0.3.1</string>
+  <key>CFBundleVersion</key><string>0.4.0</string>
+  <key>CFBundleShortVersionString</key><string>0.4.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
 </dict>
 </plist>

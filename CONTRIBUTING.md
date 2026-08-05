@@ -2,9 +2,9 @@
 
 Keep Codex Status Bar small, local, native, and dependency-free.
 
-Welcome changes include correctness fixes, Codex hook compatibility, performance improvements, terminal/app surface detection, accessibility, and restrained visual polish.
+Welcome changes include correctness fixes, Codex Desktop lifecycle compatibility, performance improvements, accessibility, and restrained visual polish.
 
-Out of scope: transcript parsing, usage or cost dashboards, telemetry, API calls, background system behavior, and unrelated agent providers.
+Out of scope: Codex CLI hooks, message-content parsing, usage or cost dashboards, telemetry, API calls, and unrelated agent providers.
 
 Before submitting a change, run:
 
@@ -15,4 +15,4 @@ bash -n build.sh
 ./build.sh
 ```
 
-Test behavioral changes in both Codex CLI and Codex Desktop when possible. Use Conventional Commit prefixes such as `feat`, `fix`, `test`, `docs`, and `chore`.
+Test behavioral changes in Codex Desktop. Use Conventional Commit prefixes such as `feat`, `fix`, `test`, `docs`, and `chore`.

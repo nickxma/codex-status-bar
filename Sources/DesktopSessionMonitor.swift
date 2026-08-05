@@ -9,6 +9,7 @@ final class DesktopSessionMonitor {
         var offset: UInt64
         var sessionID: String
         var cwd: String
+        var threadSource: String
         var state: [String: Any]
     }
 
@@ -24,7 +25,12 @@ final class DesktopSessionMonitor {
     private var lastDirectoryRefresh: TimeInterval = 0
     private var nextRefreshRequest: TimeInterval = 0
     private let refreshRequestLock = NSLock()
-    private let iso = ISO8601DateFormatter()
+    private let isoFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private let isoBasic = ISO8601DateFormatter()
     private let queue = DispatchQueue(label: "com.nickxma.codexstatusbar.desktop-monitor", qos: .utility)
 
     init(
@@ -125,6 +131,7 @@ final class DesktopSessionMonitor {
             guard var cursor = cursors[path], !cursor.state.isEmpty,
                   let title = titles[cursor.sessionID], cursor.state["project"] as? String != title else { continue }
             cursor.state["project"] = title
+            cursor.state["indexedTitle"] = true
             cursors[path] = cursor
             write(cursor: cursor, transcript: path)
         }
@@ -210,7 +217,7 @@ final class DesktopSessionMonitor {
 
     private func initialCursor(url: URL, size: UInt64) -> Cursor {
         let fallbackID = url.deletingPathExtension().lastPathComponent.split(separator: "-").suffix(5).joined(separator: "-")
-        var cursor = Cursor(offset: 0, sessionID: fallbackID, cwd: "", state: [:])
+        var cursor = Cursor(offset: 0, sessionID: fallbackID, cwd: "", threadSource: "", state: [:])
         guard let handle = try? FileHandle(forReadingFrom: url) else { return cursor }
         defer { try? handle.close() }
         // Session metadata is the first line and may sit outside the tail window.
@@ -220,6 +227,7 @@ final class DesktopSessionMonitor {
            let payload = object["payload"] as? [String: Any] {
             cursor.sessionID = payload["id"] as? String ?? cursor.sessionID
             cursor.cwd = payload["cwd"] as? String ?? cursor.cwd
+            cursor.threadSource = payload["thread_source"] as? String ?? cursor.threadSource
         }
         let window: UInt64 = 512 * 1024
         let start = size > window ? size - window : 0
@@ -240,9 +248,10 @@ final class DesktopSessionMonitor {
             if type == "session_meta" {
                 cursor.sessionID = payload["id"] as? String ?? cursor.sessionID
                 if let cwd = payload["cwd"] as? String, !cwd.isEmpty { cursor.cwd = cwd }
+                cursor.threadSource = payload["thread_source"] as? String ?? cursor.threadSource
                 continue
             }
-            let timestamp = (object["timestamp"] as? String).flatMap { iso.date(from: $0)?.timeIntervalSince1970 }
+            let timestamp = (object["timestamp"] as? String).flatMap { parseTimestamp($0) }
                 ?? Date().timeIntervalSince1970
             if type == "event_msg", let event = payload["type"] as? String {
                 switch event {
@@ -284,6 +293,7 @@ final class DesktopSessionMonitor {
         let project = titles[cursor.sessionID] ?? fallback
         return [
             "state": state, "label": label, "project": project,
+            "indexedTitle": titles[cursor.sessionID] != nil, "threadSource": cursor.threadSource,
             "cwd": cursor.cwd, "sessionId": cursor.sessionID, "turnId": turnID,
             "transcript": transcript, "surface": "codex-desktop", "term_program": "",
             "pid": Int(pid), "started": true, "startedAt": startedAt, "ts": timestamp,
@@ -292,7 +302,9 @@ final class DesktopSessionMonitor {
     }
 
     private func write(cursor: Cursor, transcript: String) {
-        guard !cursor.state.isEmpty else { return }
+        // Only top-level, user-owned Codex Desktop tasks belong in the status menu. Internal exec
+        // sessions, automations, CLI sessions, and titleless helper runs remain entirely invisible.
+        guard !cursor.state.isEmpty, cursor.threadSource == "user", titles[cursor.sessionID] != nil else { return }
         try? FileManager.default.createDirectory(at: stateRoot, withIntermediateDirectories: true)
         let safeID = cursor.sessionID.map { $0.isLetter || $0.isNumber || "._-".contains($0) ? $0 : "_" }
         let url = stateRoot.appendingPathComponent(String(safeID) + ".json")
@@ -303,5 +315,9 @@ final class DesktopSessionMonitor {
     private func parse(_ line: String) -> [String: Any]? {
         guard let data = line.data(using: .utf8) else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private func parseTimestamp(_ value: String) -> TimeInterval? {
+        (isoFractional.date(from: value) ?? isoBasic.date(from: value))?.timeIntervalSince1970
     }
 }
