@@ -16,7 +16,7 @@ jobs:
       - name: Test
         run: ./scripts/test.sh
       - name: Build DMG
-        run: SKIP_NOTARIZE=1 ./build.sh --dmg
+        run: BUILD_ARCH=universal SKIP_NOTARIZE=1 ./build.sh --dmg
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
