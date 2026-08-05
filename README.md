@@ -8,6 +8,31 @@ A tiny native macOS menu-bar app that shows live Codex Desktop task state.
 
 It watches Codex Desktop's local lifecycle event stream. There is no setup, account, helper process, or hook configuration.
 
+## Lineage and credit
+
+This edition builds on [Lasse's Codex Status Bar](https://github.com/lassejlv/codex-status-bar), which adapted [Mick Cesanek's original Claude Status Bar](https://github.com/m1ckc3s/claude-status-bar) for Codex. Their architecture, interface ideas, and MIT-licensed work made this project possible.
+
+- **Mick Cesanek** created the original Claude Status Bar and its native macOS menu-bar design.
+- **Lasse** created the first Codex fork, including Codex lifecycle support and the pet-based interface.
+- **This edition** is maintained by [Nick Mauro](https://github.com/nickxma) as a focused, zero-setup companion for Codex Desktop.
+
+The original MIT copyright and license are preserved in [LICENSE](LICENSE), with additional detail in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+
+## How this edition differs
+
+| Area | Earlier Codex fork | This edition |
+| --- | --- | --- |
+| Codex surfaces | CLI and Desktop integration | Codex Desktop only |
+| Setup | Codex hooks and a bundled helper | No hooks, helper, account, or configuration |
+| Activity detection | Hook-driven status plus Desktop compatibility | Event-driven local Desktop lifecycle monitoring |
+| Menu | Pet selection, animation, and mixed session rows | Exact task titles, thinking words, timer, sound, and clear active/recent groups |
+| Session list | Multiple Codex surfaces and workspace-oriented rows | Top-level user tasks only; internal runs, automations, CLI sessions, and helpers are filtered out |
+| Completed tasks | General idle-session retention | Five most recent completions for 15 minutes |
+| Background behavior | Tied to Codex/session lifecycle | Lightweight login utility that is ready whenever Codex opens |
+| Distribution | Source-oriented fork | Tested universal DMG for Apple Silicon and Intel, built by GitHub Actions |
+
+This is a substantial derivative, not an official successor. Upstream credit does not imply that Mick or Lasse endorses or maintains this edition.
+
 ## What it shows
 
 - A rotating Claude-style thinking word while Codex works (`Pondering…`, `Brewing…`, `Tinkering…`).
