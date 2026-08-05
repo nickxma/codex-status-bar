@@ -54,17 +54,25 @@ cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 #   1. A "Developer ID Application" certificate in your keychain (Xcode > Settings > Accounts).
 #   2. A notarytool credential profile:
 #        xcrun notarytool store-credentials "codex-statusbar" \
-#          --apple-id you@example.com --team-id W9JZ4932LA --password <app-specific-password>
+#          --apple-id you@example.com --team-id <team-id> --password <app-specific-password>
 # Then `./build.sh --dmg` auto-signs + notarizes. Without a cert it falls back to an
 # ad-hoc dev build (runnable locally; users would need right-click > Open once).
-TEAM_ID="W9JZ4932LA"
+TEAM_ID="${TEAM_ID:-}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-codex-statusbar}"
+NOTARY_KEYCHAIN="${NOTARY_KEYCHAIN:-}"
+NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+if [[ -n "$NOTARY_KEYCHAIN" ]]; then
+  NOTARY_AUTH+=(--keychain "$NOTARY_KEYCHAIN")
+fi
 
-# `|| true` so a missing Developer ID cert (grep matches nothing → nonzero, which `set -eo pipefail`
-# would otherwise treat as a fatal error) falls through to the ad-hoc dev build below instead of
-# aborting the whole script.
-SIGN_ID="$(security find-identity -v -p codesigning 2>/dev/null \
-  | grep "Developer ID Application" | grep "$TEAM_ID" | head -1 | sed -E 's/.*"(.*)"/\1/')" || true
+# Use the requested team when supplied; otherwise use the first Developer ID Application
+# identity in the current keychain search list. An empty result falls through to the local,
+# ad-hoc-signed build path.
+IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" || true)"
+if [[ -n "$TEAM_ID" ]]; then
+  IDENTITIES="$(printf '%s\n' "$IDENTITIES" | grep "$TEAM_ID" || true)"
+fi
+SIGN_ID="$(printf '%s\n' "$IDENTITIES" | head -1 | sed -E 's/.*"(.*)"/\1/')"
 
 # Strip extended attributes (Finder info, quarantine, etc.) that bundled resources can
 # carry — codesign rejects them ("resource fork, Finder information, ... not allowed").
@@ -74,7 +82,7 @@ if [[ -n "$SIGN_ID" ]]; then
   echo "Signing with Developer ID: $SIGN_ID"
   codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP"
 else
-  echo "No Developer ID cert for team $TEAM_ID found — ad-hoc signing (local dev build)."
+  echo "No matching Developer ID cert found — ad-hoc signing (local dev build)."
   codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 fi
 echo "Built $APP"
@@ -87,7 +95,7 @@ if [[ "${1:-}" == "--dmg" ]]; then
     echo "Notarizing the app via profile '$NOTARY_PROFILE' (can take a minute)…"
     rm -f build/app-notarize.zip
     ditto -c -k --keepParent "$APP" build/app-notarize.zip
-    xcrun notarytool submit build/app-notarize.zip --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun notarytool submit build/app-notarize.zip "${NOTARY_AUTH[@]}" --wait
     xcrun stapler staple "$APP"
     rm -f build/app-notarize.zip
     echo "App notarized + stapled."
@@ -163,7 +171,7 @@ OSA
     codesign --force --timestamp --sign "$SIGN_ID" "$DMG"
     if [[ "${SKIP_NOTARIZE:-}" != "1" ]]; then
       echo "Notarizing the DMG via profile '$NOTARY_PROFILE' (can take a minute)…"
-      xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+      xcrun notarytool submit "$DMG" "${NOTARY_AUTH[@]}" --wait
       xcrun stapler staple "$DMG"
       echo "DMG notarized + stapled."
     else

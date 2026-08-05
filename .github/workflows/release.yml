@@ -11,14 +11,62 @@ permissions:
 jobs:
   release:
     runs-on: macos-14
+    env:
+      NOTARY_PROFILE: codex-statusbar
+      SIGNING_AVAILABLE: ${{ secrets.APPLE_CERTIFICATE_BASE64 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Test
         run: ./scripts/test.sh
-      - name: Build DMG
-        run: BUILD_ARCH=universal SKIP_NOTARIZE=1 ./build.sh --dmg
+
+      - name: Import signing certificate and notarization credentials
+        if: env.SIGNING_AVAILABLE == 'true'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          certificate_path="$RUNNER_TEMP/codex-statusbar.p12"
+          keychain_path="$RUNNER_TEMP/codex-statusbar.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+
+          printf '%s' "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --keychain "$keychain_path"
+
+          echo "NOTARY_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+          rm -f "$certificate_path"
+
+      - name: Build signed and notarized DMG
+        if: env.SIGNING_AVAILABLE == 'true'
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: BUILD_ARCH=universal ./build.sh --dmg
+
+      - name: Build ad-hoc-signed DMG
+        if: env.SIGNING_AVAILABLE != 'true'
+        run: |
+          echo "::warning::Apple signing secrets are incomplete; publishing an ad-hoc-signed DMG."
+          BUILD_ARCH=universal SKIP_NOTARIZE=1 ./build.sh --dmg
+
+      - name: Remove temporary signing keychain
+        if: always() && env.SIGNING_AVAILABLE == 'true'
+        run: security delete-keychain "$NOTARY_KEYCHAIN" || true
+
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: build/CodexStatusBar.dmg
           generate_release_notes: true
