@@ -373,24 +373,19 @@ final class StatusController: NSObject, NSMenuDelegate {
             return eff != "permission" && !StatusPolicy.isWorking(eff)
                 && now - s.ts <= StatusPolicy.recentSessionRetention
         }.sorted { $0.ts > $1.ts }.prefix(StatusPolicy.maximumRecentSessions)
-        let visible = active + Array(recent)
+        if !active.isEmpty {
+            menu.addItem(header("Active tasks"))
+            addSessionRows(active, to: menu, now: now)
+        }
+        if !recent.isEmpty {
+            menu.addItem(header("Recently completed"))
+            addSessionRows(Array(recent), to: menu, now: now)
+        }
 
-        if !visible.isEmpty {
-            menu.addItem(header("Sessions"))
-            for s in visible {
-                let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
-                let view = SessionRowView(id: s.id, width: CGFloat(uiConfig()["boxWidth"] ?? 300))
-                view.onClick = { [weak self] in menu.cancelTracking(); self?.openCodex() }
-                configureSessionRow(view, s, eff: eff)
-                let it = NSMenuItem()
-                it.view = view
-                menu.addItem(it)
-                sessionMenuItems.append((it, s.id))  // kept so tick() can live-update the timers
-            }
+        if !active.isEmpty || !recent.isEmpty {
             menu.addItem(.separator())
         } else if codexDesktopRunning() {
-            // No live session to pin, but the desktop app is up — give a way to jump back in.
-            menu.addItem(header("Sessions"))
+            menu.addItem(header("Codex"))
             let open = NSMenuItem(title: "Open Codex", action: #selector(openCodex), keyEquivalent: "")
             open.target = self
             menu.addItem(open)
@@ -428,6 +423,19 @@ final class StatusController: NSObject, NSMenuDelegate {
         let q = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         q.target = self
         menu.addItem(q)
+    }
+
+    func addSessionRows(_ rows: [Session], to menu: NSMenu, now: TimeInterval) {
+        for s in rows {
+            let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
+            let view = SessionRowView(id: s.id, width: CGFloat(uiConfig()["boxWidth"] ?? 300))
+            view.onClick = { [weak self] in menu.cancelTracking(); self?.openCodex() }
+            configureSessionRow(view, s, eff: eff)
+            let item = NSMenuItem()
+            item.view = view
+            menu.addItem(item)
+            sessionMenuItems.append((item, s.id))
+        }
     }
 
     func header(_ title: String) -> NSMenuItem {

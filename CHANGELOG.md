@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Split the vague Sessions list into clear **Active tasks** and **Recently completed** sections.
+- Show **Open Codex** under a simple Codex heading when there is no task history to display.
+
 ## 0.4.0
 
 - Added native launch-at-login support, enabled by default with an in-app toggle.
