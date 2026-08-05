@@ -14,7 +14,10 @@ final class DesktopSessionMonitor {
 
     private let sessionsRoot: URL
     private let stateRoot: URL
+    private let titleIndexURL: URL
     private let pidProvider: () -> pid_t
+    private var titles: [String: String] = [:]
+    private var titleWatcher: DispatchSourceFileSystemObject?
     private var cursors: [String: Cursor] = [:]
     private var fileWatchers: [String: DispatchSourceFileSystemObject] = [:]
     private var directoryWatchers: [String: DispatchSourceFileSystemObject] = [:]
@@ -29,18 +32,22 @@ final class DesktopSessionMonitor {
             .appendingPathComponent(".codex/sessions", isDirectory: true),
         stateRoot: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/statusbar/state.d", isDirectory: true),
+        titleIndexURL: URL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/session_index.jsonl"),
         pidProvider: @escaping () -> pid_t = {
             NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == "com.openai.codex" }?.processIdentifier ?? 0
         }
     ) {
         self.sessionsRoot = sessionsRoot
         self.stateRoot = stateRoot
+        self.titleIndexURL = titleIndexURL
         self.pidProvider = pidProvider
     }
 
     deinit {
         for source in fileWatchers.values { source.cancel() }
         for source in directoryWatchers.values { source.cancel() }
+        titleWatcher?.cancel()
     }
 
     func poll(now: TimeInterval = Date().timeIntervalSince1970) {
@@ -57,6 +64,7 @@ final class DesktopSessionMonitor {
     private func refreshDirectories(now: TimeInterval) {
         guard directoryWatchers.isEmpty || now - lastDirectoryRefresh >= 5 else { return }
         lastDirectoryRefresh = now
+        watchTitleIndex()
         var candidates = Set<URL>()
         for zone in [TimeZone.current, TimeZone(secondsFromGMT: 0)!] {
             for dayOffset in [-86_400, 0, 86_400] {
@@ -72,6 +80,54 @@ final class DesktopSessionMonitor {
             }
         }
         for directory in candidates { watchDirectory(directory) }
+    }
+
+    private func watchTitleIndex() {
+        guard titleWatcher == nil, FileManager.default.fileExists(atPath: titleIndexURL.path) else { return }
+        reloadTitles()
+        let descriptor = Darwin.open(titleIndexURL.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .extend, .attrib, .rename, .delete],
+            queue: queue
+        )
+        source.setEventHandler { [weak self] in
+            guard let self, let source = self.titleWatcher else { return }
+            let events = source.data
+            if events.contains(.delete) || events.contains(.rename) {
+                self.reloadTitles()
+                source.cancel()
+                self.titleWatcher = nil
+            } else {
+                self.reloadTitles()
+            }
+        }
+        source.setCancelHandler { Darwin.close(descriptor) }
+        titleWatcher = source
+        source.resume()
+    }
+
+    private func reloadTitles() {
+        guard let data = try? Data(contentsOf: titleIndexURL),
+              let text = String(data: data, encoding: .utf8) else { return }
+        var updated: [String: String] = [:]
+        for line in text.split(separator: "\n") {
+            guard let object = parse(String(line)),
+                  let id = object["id"] as? String,
+                  let title = object["thread_name"] as? String,
+                  !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            updated[id] = title
+        }
+        guard updated != titles else { return }
+        titles = updated
+        for path in Array(cursors.keys) {
+            guard var cursor = cursors[path], !cursor.state.isEmpty,
+                  let title = titles[cursor.sessionID], cursor.state["project"] as? String != title else { continue }
+            cursor.state["project"] = title
+            cursors[path] = cursor
+            write(cursor: cursor, transcript: path)
+        }
     }
 
     private func watchDirectory(_ url: URL) {
@@ -224,7 +280,8 @@ final class DesktopSessionMonitor {
                            timestamp: Double, startedAt: Double, turnID: String,
                            transcript: String) -> [String: Any] {
         let pid = pidProvider()
-        let project = cursor.cwd.isEmpty ? "Codex" : URL(fileURLWithPath: cursor.cwd).lastPathComponent
+        let fallback = cursor.cwd.isEmpty ? "Codex" : URL(fileURLWithPath: cursor.cwd).lastPathComponent
+        let project = titles[cursor.sessionID] ?? fallback
         return [
             "state": state, "label": label, "project": project,
             "cwd": cursor.cwd, "sessionId": cursor.sessionID, "turnId": turnID,

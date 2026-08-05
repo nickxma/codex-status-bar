@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Display the exact Codex task title from the local session index.
+- Propagate task-title renames through filesystem events.
+- Keep the workspace folder name only as a fallback when no title is available.
+
 ## 0.3.0
 
 - Simplified the app to zero-setup Codex Desktop support only.

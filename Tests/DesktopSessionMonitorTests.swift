@@ -7,6 +7,7 @@ struct DesktopSessionMonitorTests {
         let root = fm.temporaryDirectory.appendingPathComponent("codex-status-monitor-\(UUID().uuidString)")
         let sessions = root.appendingPathComponent("sessions")
         let states = root.appendingPathComponent("states")
+        let titleIndex = root.appendingPathComponent("session_index.jsonl")
         defer { try? fm.removeItem(at: root) }
 
         let now = Date()
@@ -18,6 +19,7 @@ struct DesktopSessionMonitorTests {
         try fm.createDirectory(at: day, withIntermediateDirectories: true)
 
         let sessionID = "desktop-monitor-test"
+        try Data("{\"id\":\"\(sessionID)\",\"thread_name\":\"Trace Will the Real X\"}\n".utf8).write(to: titleIndex)
         let log = day.appendingPathComponent("rollout-test-\(sessionID).jsonl")
         let initial = """
         {"timestamp":"2026-08-05T12:00:00Z","type":"session_meta","payload":{"id":"\(sessionID)","cwd":"/tmp/example"}}
@@ -26,7 +28,9 @@ struct DesktopSessionMonitorTests {
         """
         try Data(initial.utf8).write(to: log)
 
-        let monitor = DesktopSessionMonitor(sessionsRoot: sessions, stateRoot: states, pidProvider: { 4242 })
+        let monitor = DesktopSessionMonitor(
+            sessionsRoot: sessions, stateRoot: states, titleIndexURL: titleIndex, pidProvider: { 4242 }
+        )
         monitor.poll(now: now.timeIntervalSince1970)
         let state = states.appendingPathComponent(sessionID + ".json")
         let discoveryDeadline = Date().addingTimeInterval(0.75)
@@ -35,6 +39,9 @@ struct DesktopSessionMonitorTests {
         }
         guard readState(state)?["state"] as? String == "done" else {
             fatalError("initial Desktop state was not discovered")
+        }
+        guard readState(state)?["project"] as? String == "Trace Will the Real X" else {
+            fatalError("Codex thread title was not used")
         }
 
         let started = Date()
@@ -52,6 +59,15 @@ struct DesktopSessionMonitorTests {
             fatalError("filesystem event did not surface task_started within 750 ms")
         }
         guard result["pid"] as? Int == 4242 else { fatalError("Desktop host PID was not preserved") }
+        let renamed = "{\"id\":\"\(sessionID)\",\"thread_name\":\"Renamed Thread\"}\n"
+        try Data(renamed.utf8).write(to: titleIndex)
+        let renameDeadline = Date().addingTimeInterval(0.75)
+        while Date() < renameDeadline, readState(state)?["project"] as? String != "Renamed Thread" {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        guard readState(state)?["project"] as? String == "Renamed Thread" else {
+            fatalError("thread rename was not propagated within 750 ms")
+        }
         let latency = Date().timeIntervalSince(started)
         print(String(format: "DesktopSessionMonitorTests: event latency %.0f ms", latency * 1_000))
     }
