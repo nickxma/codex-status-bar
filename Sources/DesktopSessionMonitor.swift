@@ -2,8 +2,8 @@ import Foundation
 import AppKit
 import Darwin
 
-/// Converts Codex Desktop's local lifecycle stream into the same small state files used by
-/// the CLI hooks. Only event names and session metadata are inspected; message content is ignored.
+/// Converts Codex Desktop's local lifecycle stream into small local state files.
+/// Only event names and session metadata are inspected; message content is ignored.
 final class DesktopSessionMonitor {
     private struct Cursor {
         var offset: UInt64

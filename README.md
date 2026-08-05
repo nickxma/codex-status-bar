@@ -1,8 +1,8 @@
 # Codex Status Bar
 
-A tiny native macOS menu-bar app that shows live Codex task state across Codex CLI and Codex Desktop.
+A tiny native macOS menu-bar app that shows live Codex Desktop task state.
 
-It watches Codex Desktop's local lifecycle event stream and uses Codex's documented hooks for CLI sessions. Multiple sessions are aggregated so a permission request is never hidden behind ordinary work.
+It watches Codex Desktop's local lifecycle event stream. There is no setup, account, helper process, or hook configuration.
 
 ## What it shows
 
@@ -32,26 +32,7 @@ For a DMG:
 
 Builds are native to the current Mac by default. A release runner with full Xcode can produce a universal binary with `BUILD_ARCH=universal ./build.sh --dmg`.
 
-Codex Desktop works automatically. On first launch, Codex Status Bar asks whether it may add CLI hooks to `~/.codex/hooks.json`. Existing hooks are preserved and the original file is backed up once.
-
-CLI users should then open `/hooks` in Codex, review the eight Codex Status Bar commands, and trust them. Codex intentionally skips new hooks until their exact definitions are approved.
-
-## Supported events
-
-- `SessionStart`
-- `UserPromptSubmit`
-- `SubagentStart`
-- `PreToolUse`
-- `PostToolUse`
-- `PermissionRequest`
-- `SubagentStop`
-- `Stop`
-
-CLI sessions are removed when their Codex process exits. Desktop sessions are discovered from `~/.codex/sessions`, updated through filesystem events, and collapsed to the latest resting row per workspace.
-
-## Uninstall hooks
-
-Use **Reinstall Hooks…** to repair moved helper paths. Choose **Uninstall Hooks…** to remove only Codex Status Bar's marked commands while preserving every unrelated hook.
+Open the app while Codex Desktop is running. Sessions are discovered from `~/.codex/sessions`, updated through filesystem events, and collapsed to the latest resting row per workspace.
 
 ## Testing
 

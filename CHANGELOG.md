@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- Simplified the app to zero-setup Codex Desktop support only.
+- Removed CLI hooks, the bundled hook helper, hook setup UI, and hook configuration entirely.
+- Removed redundant APP badges and their rendering code.
+
 ## 0.2.0
 
 - Added live Codex Desktop support through local lifecycle event watching.

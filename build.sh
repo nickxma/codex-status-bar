@@ -5,7 +5,6 @@ cd "$(dirname "$0")"
 
 APP="build/CodexStatusBar.app"
 BIN="$APP/Contents/MacOS/CodexStatusBar"
-HOOK="$APP/Contents/Resources/CodexStatusHook"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
@@ -27,14 +26,6 @@ case "$BUILD_ARCH" in
 esac
 
 mkdir -p "$APP/Contents/Resources"
-if [[ "$BUILD_ARCH" == "universal" ]]; then
-  swiftc -O -target arm64-apple-macos12.0 Sources/HookCore.swift HookHelper/main.swift -o "$HOOK.arm64"
-  swiftc -O -target x86_64-apple-macos12.0 Sources/HookCore.swift HookHelper/main.swift -o "$HOOK.x86_64"
-  lipo -create "$HOOK.arm64" "$HOOK.x86_64" -output "$HOOK"
-  rm -f "$HOOK.arm64" "$HOOK.x86_64"
-else
-  swiftc -O -target "$BUILD_ARCH-apple-macos12.0" Sources/HookCore.swift HookHelper/main.swift -o "$HOOK"
-fi
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -45,8 +36,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Codex Status Bar</string>
   <key>CFBundleIdentifier</key><string>com.nickxma.codexstatusbar</string>
   <key>CFBundleExecutable</key><string>CodexStatusBar</string>
-  <key>CFBundleVersion</key><string>0.2.0</string>
-  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+  <key>CFBundleVersion</key><string>0.3.0</string>
+  <key>CFBundleShortVersionString</key><string>0.3.0</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
@@ -81,11 +72,9 @@ xattr -cr "$APP"
 
 if [[ -n "$SIGN_ID" ]]; then
   echo "Signing with Developer ID: $SIGN_ID"
-  codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$HOOK"
   codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP"
 else
   echo "No Developer ID cert for team $TEAM_ID found — ad-hoc signing (local dev build)."
-  codesign --force --sign - "$HOOK" >/dev/null 2>&1 || true
   codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 fi
 echo "Built $APP"

@@ -96,9 +96,9 @@ final class ToggleView: NSView {
     }
 }
 
-// A session row as a custom view so a flexible spacer can pin the timer + pill to the true trailing
+// A session row as a custom view so a flexible spacer can pin the timer to the true trailing
 // edge (a plain menu-item title can't cross the menu's reserved shortcut/submenu-arrow column).
-// Layout: [icon] name  <spacer>  timer  [pill], with timer+pill pinned right via autoresizing.
+// Layout: [icon] name  <spacer>  timer.
 final class SessionRowView: NSView {
     let id: String
     var onClick: (() -> Void)?
@@ -106,12 +106,10 @@ final class SessionRowView: NSView {
     private let spinner = NSProgressIndicator()
     private let nameField = NSTextField(labelWithString: "")
     private let timerField = NSTextField(labelWithString: "")
-    private let pillView = NSImageView()
     private let pad: CGFloat = 14, iconSize: CGFloat = 16, rowH: CGFloat = 24
     private let highlightView = NSVisualEffectView()  // system selection material = exact native highlight
     private var hovered = false
     private var iconBaseTint: NSColor?       // tint when not hovered (template icons); white on hover
-    private var pillNormal: NSImage?, pillSelected: NSImage?
     private var nameText = "", branchText = ""
 
     init(id: String, width: CGFloat) {
@@ -148,14 +146,11 @@ final class SessionRowView: NSView {
         timerField.alignment = .right
         timerField.autoresizingMask = [.minXMargin]
         addSubview(timerField)
-        pillView.imageScaling = .scaleNone
-        pillView.autoresizingMask = [.minXMargin]
-        addSubview(pillView)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func configure(icon: NSImage?, iconTint: NSColor?, spinning: Bool, name: String, branch: String, timer: String?,
-                   pillNormal: NSImage?, pillSelected: NSImage?, pillInset: CGFloat, timerGap: CGFloat) {
+                   trailingInset: CGFloat, timerGap: CGFloat) {
         let w = bounds.width
         iconView.image = icon
         iconBaseTint = iconTint
@@ -171,16 +166,7 @@ final class SessionRowView: NSView {
         }
         nameText = name; branchText = branch
         renderName()
-        self.pillNormal = pillNormal; self.pillSelected = pillSelected
-        let pill = hovered ? pillSelected : pillNormal
-        var pillLeft = w - pillInset
-        if let pill = pill {
-            pillView.isHidden = false
-            pillView.image = pill
-            pillView.frame = NSRect(x: w - pillInset - pill.size.width, y: (rowH - pill.size.height) / 2,
-                                    width: pill.size.width, height: pill.size.height)
-            pillLeft = pillView.frame.minX
-        } else { pillView.isHidden = true }
+        let trailingEdge = w - trailingInset
         if let timer = timer {
             timerField.isHidden = false
             timerField.stringValue = timer
@@ -194,11 +180,11 @@ final class SessionRowView: NSView {
             let nf = nameField.font ?? NSFont.menuFont(ofSize: 0)
             let baseline = { (f: NSFont) in (16 - (f.ascender - f.descender)) / 2 - f.descender }
             let dy = baseline(nf) - baseline(font)
-            timerField.frame = NSRect(x: pillLeft - timerGap - tw, y: (rowH - 16) / 2 + dy, width: tw, height: 16)
+            timerField.frame = NSRect(x: trailingEdge - tw, y: (rowH - 16) / 2 + dy, width: tw, height: 16)
         } else { timerField.isHidden = true }
-        // Name stretches to whatever the timer/pill leave free (branch text made the fixed 160 tight);
+        // Name stretches to whatever the timer leaves free (branch text made the fixed 160 tight);
         // pixel truncation via the paragraph style handles overflow.
-        let nameRight = timer != nil ? timerField.frame.minX : pillLeft
+        let nameRight = timer != nil ? timerField.frame.minX : trailingEdge
         nameField.frame.size.width = max(40, nameRight - timerGap - nameField.frame.minX)
     }
     // name in the label color, " · branch" dimmed — mirrored on hover, where setting textColor
@@ -237,7 +223,6 @@ final class SessionRowView: NSView {
         renderName()
         timerField.textColor = h ? .white : .secondaryLabelColor
         iconView.contentTintColor = h ? .white : iconBaseTint
-        if !pillView.isHidden { pillView.image = h ? pillSelected : pillNormal }
     }
     override func layout() {
         super.layout()
@@ -250,7 +235,6 @@ final class StatusController: NSObject, NSMenuDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let stateDir = (NSHomeDirectory() as NSString).appendingPathComponent(".codex/statusbar/state.d")
     let codexDesktopBundleID = "com.openai.codex"
-    var installPromptVisible = false
 
     var pollTimer: Timer?
     let desktopMonitor = DesktopSessionMonitor()
@@ -265,11 +249,9 @@ final class StatusController: NSObject, NSMenuDelegate {
     var stalePruneAge: TimeInterval { UserDefaults.standard.object(forKey: "hideIdleAfter") as? Double ?? 900 }
 
     struct Session {
-        var id: String, state: String, label: String, project: String, transcript: String, turnID: String
+        var id: String, state: String, label: String, project: String
         var cwd: String         // session working directory; "" on pre-upgrade files
-        var entrypoint: String  // reliable surface hint when Codex exposes one
-        var termProgram: String // TERM_PROGRAM for CLI sessions: "Apple_Terminal", "iTerm.app", …
-        var pid: Int32          // parent Codex process; kill(pid,0) drives CLI liveness
+        var entrypoint: String  // used to exclude stale state from older CLI-capable builds
         var started: Bool       // true once the session had real activity (a prompt/tool); a merely-opened
                                 // conversation seeds started=false and stays out of the dropdown.
         var startedAt: Double, ts: Double
@@ -282,12 +264,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             self.state = o["state"] as? String ?? "idle"
             self.label = o["label"] as? String ?? ""
             self.project = o["project"] as? String ?? ""
-            self.transcript = o["transcript"] as? String ?? ""
-            self.turnID = o["turnId"] as? String ?? ""
             self.cwd = o["cwd"] as? String ?? ""
             self.entrypoint = o["surface"] as? String ?? o["entrypoint"] as? String ?? ""
-            self.termProgram = o["term_program"] as? String ?? ""
-            self.pid = Int32(truncatingIfNeeded: (o["pid"] as? NSNumber)?.intValue ?? 0)
             self.started = o["started"] as? Bool ?? false
             self.startedAt = (o["startedAt"] as? NSNumber)?.doubleValue ?? 0
             self.ts = (o["ts"] as? NSNumber)?.doubleValue ?? 0
@@ -298,7 +276,6 @@ final class StatusController: NSObject, NSMenuDelegate {
     var previousState: [String: String] = [:]
     var turnStart: [String: Double] = [:]
     var thinkingWordBySession: [String: String] = [:]
-    var abortCache: [String: (modified: Date, aborted: Bool)] = [:]
     var menuIsOpen = false                  // refresh the dropdown's per-session timers only while open
     var sessionMenuItems: [(item: NSMenuItem, id: String)] = []
     var activeBase = ""        // label without the elapsed clock
@@ -341,83 +318,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         RunLoop.main.add(t, forMode: .common)
         pollTimer = t
         tick()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.showInstallPromptIfNeeded() }
     }
 
     var currentVersion: String { (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "0" }
-
-    var hooksURL: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/hooks.json") }
-    var hookHelperPath: String? { Bundle.main.path(forResource: "CodexStatusHook", ofType: nil) }
-    var hooksAreInstalled: Bool {
-        guard let data = try? Data(contentsOf: hooksURL) else { return false }
-        return String(decoding: data, as: UTF8.self).contains(HookConfiguration.marker)
-    }
-
-    func showInstallPromptIfNeeded() {
-        guard !hooksAreInstalled, !UserDefaults.standard.bool(forKey: "hookPromptShown") else { return }
-        UserDefaults.standard.set(true, forKey: "hookPromptShown")
-        installPromptVisible = true
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Install Codex status hooks?"
-        alert.informativeText = "Codex Status Bar will add eight local command hooks to ~/.codex/hooks.json, including subagent start and stop. Existing hooks are preserved. The hooks write only task status metadata under ~/.codex/statusbar and never read your conversation."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "Install")
-        alert.addButton(withTitle: "Not Now")
-        let response = alert.runModal()
-        installPromptVisible = false
-        if response == .alertFirstButtonReturn { installHooks() }
-    }
-
-    @objc func installHooks() {
-        guard let helper = hookHelperPath else {
-            showInstallError("The bundled CodexStatusHook helper is missing. Rebuild or reinstall the app.")
-            return
-        }
-        do {
-            let existing = FileManager.default.fileExists(atPath: hooksURL.path) ? try Data(contentsOf: hooksURL) : nil
-            let installed = try HookConfiguration.install(existing: existing, helperPath: helper)
-            try FileManager.default.createDirectory(at: hooksURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if let existing {
-                let backup = hooksURL.appendingPathExtension("bak-codex-statusbar")
-                if !FileManager.default.fileExists(atPath: backup.path) { try existing.write(to: backup, options: .atomic) }
-            }
-            try installed.write(to: hooksURL, options: .atomic)
-            let alert = NSAlert()
-            alert.messageText = "Hooks installed"
-            alert.informativeText = "Open /hooks in Codex, review the new Codex Status Bar commands, and trust them. Codex will skip the hooks until you approve them."
-            alert.addButton(withTitle: "Got It")
-            alert.runModal()
-        } catch {
-            showInstallError("Codex Status Bar left your configuration unchanged. \(error.localizedDescription)\n\nFile: \(hooksURL.path)")
-        }
-    }
-
-    @objc func uninstallHooks() {
-        let alert = NSAlert()
-        alert.messageText = "Remove Codex status hooks?"
-        alert.informativeText = "Only commands marked as Codex Status Bar hooks will be removed from ~/.codex/hooks.json."
-        alert.addButton(withTitle: "Remove")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            guard FileManager.default.fileExists(atPath: hooksURL.path) else { return }
-            let existing = try Data(contentsOf: hooksURL)
-            let updated = try HookConfiguration.uninstall(existing: existing)
-            try updated.write(to: hooksURL, options: .atomic)
-        } catch {
-            showInstallError("Codex Status Bar left your configuration unchanged. \(error.localizedDescription)")
-        }
-    }
-
-    func showInstallError(_ message: String) {
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Hook update failed"
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
 
     // Numeric component-wise compare so "0.0.10" > "0.0.9".
     func versionIsNewer(_ a: String, than b: String) -> Bool {
@@ -456,11 +359,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
         sessionMenuItems.removeAll()
         let now = Date().timeIntervalSince1970
-        // Gate ONLY the desktop app: opening/clicking a conversation there seeds an idle session without
+        // Opening/clicking a conversation seeds an idle session without
         // real activity (the click-through clutter), so a desktop session stays out of the dropdown until
-        // a prompt/tool fires (started=true). CLI / terminal / editor sessions are launched deliberately,
-        // so they surface the moment they start. Any active state counts as started too (and covers
-        // pre-upgrade files with no flag).
+        // a prompt/tool fires (started=true). Any active state counts as started too.
         let allOrdered = sessions.values.sorted { $0.ts > $1.ts }   // most-recent first
         let eligible = allOrdered.filter { s in
                 let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
@@ -493,8 +394,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             for s in visible {
                 let eff = s.eff.isEmpty ? effectiveState(s, now: now) : s.eff
                 let view = SessionRowView(id: s.id, width: CGFloat(uiConfig()["boxWidth"] ?? 300))
-                let sid = s.id, ep = s.entrypoint, tp = s.termProgram
-                view.onClick = { [weak self] in menu.cancelTracking(); self?.openSession(sid, entrypoint: ep, termProgram: tp) }
+                view.onClick = { [weak self] in menu.cancelTracking(); self?.openCodex() }
                 configureSessionRow(view, s, eff: eff)
                 let it = NSMenuItem()
                 it.view = view
@@ -535,19 +435,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.addItem(soundItem)
 
         menu.addItem(.separator())
-        let hooksItem = NSMenuItem(title: hooksAreInstalled ? "Reinstall Hooks…" : "Install Hooks…", action: #selector(installHooks), keyEquivalent: "")
-        hooksItem.target = self
-        menu.addItem(hooksItem)
-        if hooksAreInstalled {
-            let uninstall = NSMenuItem(title: "Uninstall Hooks…", action: #selector(uninstallHooks), keyEquivalent: "")
-            uninstall.target = self
-            menu.addItem(uninstall)
-        }
-        if !hooksAreInstalled {
-            let trust = NSMenuItem(title: "After install: review with /hooks", action: nil, keyEquivalent: "")
-            trust.isEnabled = false
-            menu.addItem(trust)
-        }
         menu.addItem(NSMenuItem(title: "Version \(currentVersion)", action: nil, keyEquivalent: ""))
         let q = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         q.target = self
@@ -630,16 +517,13 @@ final class StatusController: NSObject, NSMenuDelegate {
         let nameMax = Int(cfg["nameMax"] ?? 30)
         let working = StatusPolicy.isWorking(eff) && s.startedAt > 0
         let resting = !(eff == "permission" || StatusPolicy.isWorking(eff))  // the dim caret
-        let tag = surfaceTag(s.entrypoint)
         v.configure(icon: sessionSymbol(s, eff: eff),
                     iconTint: resting ? .tertiaryLabelColor : .labelColor,  // caret dim; spinner matches the name font; amber image ignores tint
                     spinning: StatusPolicy.isWorking(eff),
                     name: truncated(sessionName(s), max: nameMax, keep: nameMax),
                     branch: truncated(s.branch, max: 22, keep: 20),
                     timer: working ? elapsed(max(0, Int(now - s.startedAt))) : nil,
-                    pillNormal: tag.isEmpty ? nil : pillImage(tag),
-                    pillSelected: tag.isEmpty ? nil : pillImage(tag, selected: true),
-                    pillInset: CGFloat(cfg["pillInset"] ?? 12),
+                    trailingInset: 12,
                     timerGap: CGFloat(cfg["timerGap"] ?? 10))
         // Truncated rows stay inspectable: full name, branch, and path on hover.
         var tip = sessionName(s)
@@ -656,46 +540,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
     }
 
-    // Just the repo/cwd (parent-qualified on a name collision); the surface (CLI/APP) renders as a
-    // trailing badge instead of inline.
     func sessionName(_ s: Session) -> String {
         if !s.displayName.isEmpty { return s.displayName }
         return s.project.isEmpty ? "session" : s.project
-    }
-
-    // Keep surface pills uniform and avoid claiming more precision than the helper can prove.
-    func surfaceTag(_ entrypoint: String) -> String {
-        switch entrypoint {
-        case "codex-desktop": return "APP"
-        case "":               return ""
-        default:               return "CLI"
-        }
-    }
-
-    // CLI/APP pill rendered as an image so it can sit inside the row text (right after the timer)
-    // rather than as a system badge pinned to the menu edge with a fixed, uncloseable gap.
-    func pillImage(_ text: String, selected: Bool = false) -> NSImage {
-        let t = text as NSString
-        let font = NSFont.monospacedSystemFont(ofSize: 9.5, weight: .semibold)  // mono -> 3 chars = uniform width
-        let pad: CGFloat = 7, h: CGFloat = 15
-        let cfg = uiConfig()
-        let dy = CGFloat(cfg["pillTextY"] ?? -1)  // negative nudges the text down (it reads top-heavy)
-        // Pill bg is a tunable gray per mode (black-on-light / white-on-dark at a low alpha) so light
-        // mode can be lightened independently. On a selected (blue) row it's a light translucent pill.
-        let dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let bgAlpha = CGFloat(cfg[dark ? "pillBgDark" : "pillBgLight"] ?? (dark ? 0.14 : 0.10))
-        let bg = selected ? NSColor.white.withAlphaComponent(0.22)
-                          : (dark ? NSColor.white : NSColor.black).withAlphaComponent(bgAlpha)
-        let fg = selected ? NSColor.white : NSColor.labelColor
-        let w = ceil(t.size(withAttributes: [.font: font]).width) + pad * 2
-        return NSImage(size: NSSize(width: w, height: h), flipped: false) { rect in
-            bg.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: h / 2, yRadius: h / 2).fill()
-            let a: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: fg]
-            let ts = t.size(withAttributes: a)
-            t.draw(at: NSPoint(x: (rect.width - ts.width) / 2, y: (rect.height - ts.height) / 2 + dy), withAttributes: a)
-            return true
-        }
     }
 
     func sessionSymbol(_ s: Session, eff: String) -> NSImage? {
@@ -764,26 +611,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         }
     }
 
-    // Desktop rows focus Codex. CLI rows focus the originating terminal when it is known.
-    func openSession(_ id: String, entrypoint: String, termProgram: String) {
-        if entrypoint == "codex-desktop" { openCodex(); return }
-        // Map TERM_PROGRAM to a name `open -a` understands; most terminals match verbatim.
-        let app: String
-        switch termProgram {
-        case "Apple_Terminal": app = "Terminal"
-        case "iTerm.app":      app = "iTerm"
-        case "vscode":         app = "Visual Studio Code"
-        case "WarpTerminal":   app = "Warp"
-        case "":               return  // unknown surface, nothing to focus
-        default:               app = termProgram  // Ghostty, WezTerm, Tabby, Hyper, kitty, …
-        }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        p.arguments = ["-a", app]
-        try? p.run()
-    }
-
-
     // MARK: state polling
 
     func tick() {
@@ -823,7 +650,11 @@ final class StatusController: NSObject, NSMenuDelegate {
                   let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
             let id = (f as NSString).deletingPathExtension
             let s = Session(json: o, id: id)
-            sessions[id] = s
+            if s.entrypoint == "codex-desktop" {
+                sessions[id] = s
+            } else {
+                sessions[id] = nil
+            }
         }
     }
 
@@ -834,13 +665,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         for id in Array(sessions.keys) {
             guard var s = sessions[id] else { continue }
             s.eff = effectiveState(s, now: now)   // compute once per tick; the menu + tooltip reuse it
-            // CLI state follows the parent process. Desktop shares a long-lived host process, so its
-            // idle rows expire by age instead of remaining forever.
-            let desktopExpired = s.entrypoint == "codex-desktop" && s.eff == "idle"
+            let desktopExpired = s.eff == "idle"
                 && stalePruneAge > 0 && now - s.ts > stalePruneAge
-            let dead = desktopExpired || (s.pid > 0 ? !pidAlive(s.pid)
-                : (s.eff == "idle" && stalePruneAge > 0 && now - s.ts > stalePruneAge))
-            if dead {
+            if desktopExpired {
                 try? FileManager.default.removeItem(atPath: (stateDir as NSString).appendingPathComponent(id + ".json"))
                 sessions[id] = nil; fileMTimes[id + ".json"] = nil; previousState[id] = nil
                 turnStart[id] = nil; thinkingWordBySession[id] = nil
@@ -857,11 +684,6 @@ final class StatusController: NSObject, NSMenuDelegate {
             if soundThreshold > 0, s.state == "done", prior != "done" {
                 if let started = turnStart[id], started > 0, now - started >= soundThreshold {
                     shouldChime = true
-                } else if s.entrypoint == "codex-desktop" {
-                    // Desktop currently exposes a reliable turn-ended notification but not the
-                    // matching prompt-start hook. The notification itself is authoritative, so
-                    // "Every turn" still works; duration thresholds remain CLI-only.
-                    shouldChime = soundThreshold <= 0.1
                 }
             }
             if s.state == "done" { turnStart[id] = 0 }
@@ -921,30 +743,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         if StatusPolicy.isWorking(s.state) || s.state == "permission" {
             let cap: Double = s.state == "permission" ? 7200 : 900
             if now - s.ts > cap { return "idle" }
-            if s.entrypoint != "codex-desktop",
-               turnWasAborted(transcriptPath: s.transcript, turnID: s.turnID) { return "idle" }
             return s.state
         }
         return StatusPolicy.effectiveState(rawState: s.state, age: max(0, now - s.ts))
     }
-
-    func turnWasAborted(transcriptPath: String, turnID: String) -> Bool {
-        guard !transcriptPath.isEmpty, !turnID.isEmpty,
-              let modified = (try? FileManager.default.attributesOfItem(atPath: transcriptPath)[.modificationDate]) as? Date
-        else { return false }
-        let cacheKey = transcriptPath + "|" + turnID
-        if let cached = abortCache[cacheKey], cached.modified == modified { return cached.aborted }
-        guard let handle = FileHandle(forReadingAtPath: transcriptPath) else { return false }
-        defer { try? handle.close() }
-        let size = (try? handle.seekToEnd()) ?? 0
-        let window: UInt64 = 32 * 1024
-        try? handle.seek(toOffset: size > window ? size - window : 0)
-        guard let data = try? handle.readToEnd() else { return false }
-        let aborted = StatusPolicy.turnWasAborted(in: data, turnID: turnID)
-        abortCache[cacheKey] = (modified, aborted)
-        return aborted
-    }
-
 
     // MARK: self-quit lifecycle
 
@@ -954,18 +756,10 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func sessionCount() -> Int { stateFileNames().count }
 
-    // Liveness probe: is this session's parent Codex process still alive? kill(pid,0) returns 0 if the
-    // process exists; EPERM = exists but not ours (won't happen, same user); ESRCH = gone.
-    func pidAlive(_ pid: Int32) -> Bool {
-        if pid <= 0 { return false }
-        return kill(pid, 0) == 0 || errno == EPERM
-    }
-
     // Stay while Codex Desktop is open OR a session is active; otherwise quit after a
     // short debounced grace (warmup-session churn must not kill us).
     func checkLifecycle() {
         let now = Date()
-        if installPromptVisible { notNeededSince = nil; return }
         if now.timeIntervalSince(launchedAt) < launchGrace { return }
         if codexDesktopRunning() || sessionCount() > 0 {
             notNeededSince = nil
