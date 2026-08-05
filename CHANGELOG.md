@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2
+
+- Replaced the inherited pixel-pet app artwork with the same Claude spark used by the menu-bar app.
+- Removed obsolete Codex plugin, hook, and SVG artifacts left over from the pre-Desktop-only editions.
+
 ## 0.4.1
 
 - Split the vague Sessions list into clear **Active tasks** and **Recently completed** sections.
