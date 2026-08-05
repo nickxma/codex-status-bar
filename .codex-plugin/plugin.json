@@ -1,7 +1,0 @@
-{
-  "name": "codex-status-bar",
-  "description": "Native macOS menu bar status for Codex CLI and Codex Desktop.",
-  "version": "0.1.0",
-  "license": "MIT",
-  "hooks": "./hooks/hooks.json"
-}

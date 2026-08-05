@@ -36,8 +36,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Codex Status Bar</string>
   <key>CFBundleIdentifier</key><string>com.nickxma.codexstatusbar</string>
   <key>CFBundleExecutable</key><string>CodexStatusBar</string>
-  <key>CFBundleVersion</key><string>0.4.1</string>
-  <key>CFBundleShortVersionString</key><string>0.4.1</string>
+  <key>CFBundleVersion</key><string>0.4.2</string>
+  <key>CFBundleShortVersionString</key><string>0.4.2</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
