@@ -8,6 +8,10 @@ A tiny native macOS menu-bar app that shows live Codex Desktop task state.
 
 It watches Codex Desktop's local lifecycle event stream. There is no setup, account, helper process, or hook configuration.
 
+<p align="center">
+  <img src="assets/status-menu.png" width="420" alt="Codex Status Bar showing active Codex tasks and its timer, thinking words, launch-at-login, and completion-sound controls">
+</p>
+
 ## Lineage and credit
 
 This edition builds on [Lasse's Codex Status Bar](https://github.com/lassejlv/codex-status-bar), which adapted [Mick Cesanek's original Claude Status Bar](https://github.com/m1ckc3s/claude-status-bar) for Codex. Their architecture, interface ideas, and MIT-licensed work made this project possible.
@@ -53,7 +57,7 @@ Requires macOS 13 or later.
 
 1. Download the latest `CodexStatusBar.dmg` from [Releases](https://github.com/nickxma/codex-status-bar/releases/latest).
 2. Drag **CodexStatusBar** into Applications.
-3. Right-click the app and choose **Open** the first time. The current community build is not Apple-notarized, so a normal double-click may be blocked by Gatekeeper.
+3. Open the app. Releases are signed and notarized when maintainer credentials are available; otherwise macOS may require you to right-click the app and choose **Open** once.
 
 The app launches at login by default. Disable **Launch at login** from its menu at any time.
 

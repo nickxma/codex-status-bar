@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added a current product screenshot and public issue/security guidance.
+- Updated GitHub Actions to their Node 24 releases.
+- Added optional CI signing and notarization support without embedding maintainer credentials.
+- Removed the inherited upstream Apple Team ID from the build script.
+
 ## 0.4.2
 
 - Replaced the inherited pixel-pet app artwork with the same Claude spark used by the menu-bar app.
