@@ -59,6 +59,8 @@ Requires macOS 13 or later.
 2. Drag **CodexStatusBar** into Applications.
 3. Open the app. Releases are signed and notarized when maintainer credentials are available; otherwise macOS may require you to right-click the app and choose **Open** once.
 
+Each release also includes `CodexStatusBar.dmg.sha256` for download verification.
+
 The app launches at login by default. Disable **Launch at login** from its menu at any time.
 
 ### Build from source

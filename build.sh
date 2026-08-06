@@ -5,6 +5,12 @@ cd "$(dirname "$0")"
 
 APP="build/CodexStatusBar.app"
 BIN="$APP/Contents/MacOS/CodexStatusBar"
+VERSION="$(tr -d '[:space:]' < VERSION)"
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Invalid VERSION: $VERSION" >&2
+  exit 2
+fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
@@ -27,7 +33,7 @@ esac
 
 mkdir -p "$APP/Contents/Resources"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -36,8 +42,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDisplayName</key><string>Codex Status Bar</string>
   <key>CFBundleIdentifier</key><string>com.nickxma.codexstatusbar</string>
   <key>CFBundleExecutable</key><string>CodexStatusBar</string>
-  <key>CFBundleVersion</key><string>0.4.2</string>
-  <key>CFBundleShortVersionString</key><string>0.4.2</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
