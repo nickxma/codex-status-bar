@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.4.3 - 2026-08-06
 
 - Added a current product screenshot and public issue/security guidance.
 - Updated GitHub Actions to their Node 24 releases.
 - Added optional CI signing and notarization support without embedding maintainer credentials.
 - Removed the inherited upstream Apple Team ID from the build script.
+- Added a single version source and a SHA-256 checksum beside the release DMG.
 
 ## 0.4.2
 

@@ -17,6 +17,8 @@ bash -n build.sh
 
 Test behavioral changes in Codex Desktop. Use Conventional Commit prefixes such as `feat`, `fix`, `test`, `docs`, and `chore`.
 
+The app version lives in `VERSION`. Release tags use the matching `v<version>` form.
+
 ## Maintainer release signing
 
 Tagged releases are signed and notarized when these GitHub Actions secrets are configured:
