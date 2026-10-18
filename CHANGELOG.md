@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.4 — 2026-10-18
+
+- Replace the inherited Claude artwork with the Codex cloud logo, contributed by Jared Katz.
+- Add an opt-in development rebuild and relaunch loop, contributed by Jared Katz.
+- Check each development shell script separately in the test suite.
+
 ## 0.5.3 — 2026-09-08
 
 - Follow Codex Desktop runtime status across local, SSH, and Remote Control tasks.
