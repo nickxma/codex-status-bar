@@ -329,6 +329,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var activeIconDotColor: NSColor?
     let amber = NSColor(srgbRed: 0.95, green: 0.73, blue: 0.18, alpha: 1) // "awaiting permission" yellow dot
     var showThinkingWords = true
+    var menuBarIcon = "cloud"
     var showTimer = false
     var soundThreshold: Double = 0.1
     var launchAtLogin = true
@@ -351,6 +352,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     override init() {
         super.init()
         let d = UserDefaults.standard
+        if d.string(forKey: "menuBarIcon") == "crab" { menuBarIcon = "crab" }
         if d.object(forKey: "showTimer") != nil { showTimer = d.bool(forKey: "showTimer") }
         if thinkingWordDefaults.object(forKey: "thinkingWords") != nil {
             showThinkingWords = thinkingWordDefaults.bool(forKey: "thinkingWords")
@@ -527,6 +529,19 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.addItem(toggleRow(title: "Launch at login", isOn: launchAtLogin) { [weak self] on in
             self?.setLaunchAtLogin(on)
         })
+        let iconItem = NSMenuItem(title: "Menu bar icon", action: nil, keyEquivalent: "")
+        let iconMenu = NSMenu()
+        for (value, title) in [("cloud", "Codex cloud"), ("crab", "Claude Code crab")] {
+            let item = NSMenuItem(title: title, action: #selector(chooseMenuBarIcon(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = value
+            item.state = menuBarIcon == value ? .on : .off
+            item.image = value == "crab" ? claudeCrabIcon() : codexLogoIcon()
+            iconMenu.addItem(item)
+        }
+        iconItem.submenu = iconMenu
+        menu.addItem(iconItem)
+
         let soundItem = NSMenuItem(title: "Completion Sound", action: nil, keyEquivalent: "")
         let soundMenu = NSMenu()
         for (seconds, title) in [(0.0, "Off"), (0.1, "Every turn"), (60.0, "1 min+"), (300.0, "5 min+"), (900.0, "15 min+")] {
@@ -753,6 +768,20 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     @objc func quit() { NSApp.terminate(nil) }
+
+    @objc func chooseMenuBarIcon(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String,
+              ["cloud", "crab"].contains(value) else { return }
+        menuBarIcon = value
+        UserDefaults.standard.set(value, forKey: "menuBarIcon")
+        renderedDotKey = "unset"
+        evaluate()
+        if let menu = sender.menu {
+            for item in menu.items {
+                item.state = (item.representedObject as? String) == value ? .on : .off
+            }
+        }
+    }
 
     @objc func chooseSound(_ sender: NSMenuItem) {
         guard let number = sender.representedObject as? NSNumber else { return }
@@ -1088,7 +1117,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         startedAt = labelStartedAt
         activeIconDotColor = dotColor
         let shouldAnimate = isActive && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let iconKey = "\(shouldAnimate ? "animated" : "static"):\(dotColor == nil ? "none" : "permission")"
+        let iconKey = "\(menuBarIcon):\(shouldAnimate ? "animated" : "static"):\(dotColor == nil ? "none" : "permission")"
         if shouldAnimate {
             if iconAnimationTimer == nil {
                 activeIconFrame = 0
@@ -1117,7 +1146,8 @@ final class StatusController: NSObject, NSMenuDelegate {
     func animateIconStep() {
         guard let button = statusItem.button else { return }
         button.contentTintColor = nil
-        let frame = animatedLogoFrames[activeIconFrame]
+        let frames = menuBarIcon == "crab" ? animatedCrabFrames : animatedLogoFrames
+        let frame = frames[activeIconFrame]
         button.image = activeIconDotColor.map { dotIcon(base: frame, color: $0) } ?? frame
         activeIconFrame = (activeIconFrame + 1) % StatusPolicy.activeIconFrameCount
     }
@@ -1159,8 +1189,43 @@ final class StatusController: NSObject, NSMenuDelegate {
         makeAnimatedLogoIcon(frame: $0)
     }
 
+    lazy var animatedCrabFrames: [NSImage] = (0..<StatusPolicy.activeIconFrameCount).map {
+        makeAnimatedLogoIcon(frame: $0, crab: true)
+    }
+
+    // Pixel silhouette matching the Claude Code crab. Draw in points so the
+    // template stays crisp at Retina scale and adapts to menu bar appearance.
+    func claudeCrabIcon() -> NSImage {
+        let rows = [
+            "0011111111100",
+            "0011101011100",
+            "1111101011111",
+            "1111111111111",
+            "0011111111100",
+            "0011111111100",
+            "0011000001100",
+            "0010100010100",
+            "0010100010100",
+        ]
+        let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
+            NSColor.black.setFill()
+            let pixel: CGFloat = 1.5
+            for (y, row) in rows.enumerated() {
+                for (x, cell) in row.enumerated() where cell == "1" {
+                    NSRect(x: 0.25 + CGFloat(x) * pixel,
+                           y: 3.25 + CGFloat(rows.count - 1 - y) * pixel,
+                           width: pixel, height: pixel).fill()
+                }
+            }
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "Claude Code crab"
+        return image
+    }
+
     func statusIcon(dotColor: NSColor?) -> NSImage {
-        let frame = codexLogoIcon()
+        let frame = menuBarIcon == "crab" ? claudeCrabIcon() : codexLogoIcon()
         guard let dotColor else { return frame }
         return dotIcon(base: frame, color: dotColor)
     }
@@ -1178,10 +1243,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         return image
     }
 
-    func makeAnimatedLogoIcon(frame: Int) -> NSImage {
+    func makeAnimatedLogoIcon(frame: Int, crab: Bool = false) -> NSImage {
         let side: CGFloat = 20
         let phase = StatusPolicy.activeIconPhase(frame: frame)
-        let base = codexLogoIcon()
+        let base = crab ? claudeCrabIcon() : codexLogoIcon()
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
             NSGraphicsContext.saveGraphicsState()
             let transform = NSAffineTransform()

@@ -43,6 +43,7 @@ This is a substantial derivative, not an official successor. Upstream credit doe
 
 ## What it shows
 
+- Choose **Options → Menu bar icon → Codex cloud / Claude Code crab**. The choice persists after relaunch.
 - A monochrome Codex cloud-terminal logo that automatically matches the macOS menu bar in light and dark appearances.
 - A subtle logo animation while any task is active; macOS Reduce Motion disables it automatically.
 - A rotating Claude-style thinking word while Codex works (`Pondering…`, `Brewing…`, `Tinkering…`).

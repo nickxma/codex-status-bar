@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.5
+
+- Add a saved Menu bar icon choice: Codex cloud (default) or Claude Code pixel crab. Both support activity animation, Reduce Motion, and the permission badge.
+
 ## 0.5.4 — 2026-10-18
 
 - Replace the inherited Claude artwork with the Codex cloud logo, contributed by Jared Katz.
