@@ -829,7 +829,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     func tick() {
         desktopMonitor.poll()
-        remoteMonitor.poll(enabled: desktopRunning)
+        remoteMonitor.poll(enabled: true)
         taskRegistryMonitor.poll(enabled: desktopRunning)
         refreshSessionState()
         writeRuntimeHealth()

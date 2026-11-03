@@ -69,6 +69,12 @@ non-interactive mode to read lifecycle-only data from the remote `~/.codex` dire
 Control task identity comes from Codex Desktop's local catalog and live status from its local stream; the
 app does not connect directly to Remote Control hosts.
 
+Claude Code activity on configured SSH hosts is collected from the same `~/.claude/statusbar/state.d`
+hook files used locally. Each host needs the included Claude lifecycle hooks and a working Node
+runtime. Collection does not install software or modify remote Claude settings. Codex Remote
+Control reports Codex tasks; it does not transport Claude Code hook files. A Remote Control-only
+host therefore needs an additional reachable reporting route before its Claude tasks can appear.
+
 SSH remotes must already support key-based login through their Codex alias. An SSH agent such as
 1Password may require a one-time approval for the status app's connection. Each attempt has a
 10-second timeout; after an authentication failure the app leaves that host alone until its next

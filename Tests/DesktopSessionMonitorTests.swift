@@ -10,6 +10,20 @@ struct DesktopSessionMonitorTests {
         let titleIndex = root.appendingPathComponent("session_index.jsonl")
         defer { try? fm.removeItem(at: root) }
 
+        // A retained dev catalog must not hide new production Remote Control tasks.
+        let catalogRoot = root.appendingPathComponent("catalog-discovery")
+        try fm.createDirectory(at: catalogRoot, withIntermediateDirectories: true)
+        let devCatalog = catalogRoot.appendingPathComponent("codex-dev.db")
+        let productionCatalog = catalogRoot.appendingPathComponent("codex.db")
+        try Data().write(to: devCatalog)
+        guard DesktopTaskRegistryMonitor.defaultDatabaseURL(root: catalogRoot) == devCatalog else {
+            fatalError("development-only installation lost its catalog fallback")
+        }
+        try Data().write(to: productionCatalog)
+        guard DesktopTaskRegistryMonitor.defaultDatabaseURL(root: catalogRoot) == productionCatalog else {
+            fatalError("stale development catalog shadowed the production task catalog")
+        }
+
         let now = Date()
         let parts = Calendar(identifier: .gregorian).dateComponents(in: TimeZone.current, from: now)
         let day = sessions
@@ -257,6 +271,44 @@ struct DesktopSessionMonitorTests {
         waitUntil(logStates.appendingPathComponent(controlRegistryID + ".json"), state: "thinking")
         guard readState(logStates.appendingPathComponent(controlRegistryID + ".json"))?["project"] as? String == "My Wolves & Ally" else {
             fatalError("Codex Desktop aggregate log task identity was not parsed")
+        }
+
+        // Remote Claude hooks must be collected even with no assigned Codex task.
+        let claudeConfig = root.appendingPathComponent("claude-global.json")
+        let claudeStates = root.appendingPathComponent("remote-claude-states")
+        try JSONSerialization.data(withJSONObject: ["codex-managed-remote-connections": [[
+            "hostId": "remote-ssh-discovered:test", "displayName": "Remote Mac", "alias": "test"
+        ]]]).write(to: claudeConfig)
+        let claudeLock = NSLock()
+        var claudeSnapshot = "__CLAUDE_STATUS_STATES__\n" + String(data: try JSONSerialization.data(withJSONObject: [
+            "sessionId": "claude-session", "state": "tool", "project": "example", "pid": 1234,
+            "entrypoint": "", "ts": Date().timeIntervalSince1970, "startedAt": Date().timeIntervalSince1970 - 5
+        ]), encoding: .utf8)! + "\n"
+        let claudeRemote = RemoteSessionMonitor(globalStateURL: claudeConfig, stateRoot: claudeStates,
+            pollInterval: 0, snapshotProvider: { _ in
+                claudeLock.lock(); defer { claudeLock.unlock() }
+                return Data(claudeSnapshot.utf8)
+            })
+        claudeRemote.poll(enabled: true)
+        let claudeDeadline = Date().addingTimeInterval(1)
+        while Date() < claudeDeadline, ((try? fm.contentsOfDirectory(atPath: claudeStates.path)) ?? []).isEmpty {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        guard let filename = try fm.contentsOfDirectory(atPath: claudeStates.path).first,
+              let mirrored = readState(claudeStates.appendingPathComponent(filename)),
+              mirrored["state"] as? String == "tool", mirrored["pid"] as? Int == 0,
+              mirrored["entrypoint"] as? String == "cli",
+              mirrored["project"] as? String == "Remote Mac · example" else {
+            fatalError("remote Claude hooks were not mirrored independently of assigned Codex tasks")
+        }
+        claudeLock.lock(); claudeSnapshot = "__CLAUDE_STATUS_STATES__\n"; claudeLock.unlock()
+        let cleanupDeadline = Date().addingTimeInterval(1)
+        while Date() < cleanupDeadline, fm.fileExists(atPath: claudeStates.appendingPathComponent(filename).path) {
+            claudeRemote.poll(enabled: true)
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        guard !fm.fileExists(atPath: claudeStates.appendingPathComponent(filename).path) else {
+            fatalError("removed remote Claude hook kept a phantom activity row")
         }
 
         // Codex 0.149 no longer logs the schema-v4 aggregate payload. Exact titles still come from

@@ -60,8 +60,7 @@ final class DesktopTaskRegistryMonitor {
     private let iso = ISO8601DateFormatter()
 
     init(
-        databaseURL: URL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/sqlite/codex-dev.db"),
+        databaseURL: URL = DesktopTaskRegistryMonitor.defaultDatabaseURL(),
         logsRoot: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/com.openai.codex", isDirectory: true),
         stateRoot: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -77,6 +76,17 @@ final class DesktopTaskRegistryMonitor {
         self.customSnapshotProvider = snapshotProvider
         self.liveMonitor = liveMonitor
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    }
+
+    /// Production Codex (including the ChatGPT-hosted desktop) uses codex.db.
+    /// An old development catalog can remain alongside it indefinitely. Prefer the
+    /// production catalog and fall back only for development-only installations.
+    static func defaultDatabaseURL(
+        root: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sqlite")
+    ) -> URL {
+        let production = root.appendingPathComponent("codex.db")
+        if FileManager.default.fileExists(atPath: production.path) { return production }
+        return root.appendingPathComponent("codex-dev.db")
     }
 
     func poll(enabled: Bool, now: TimeInterval = Date().timeIntervalSince1970) {

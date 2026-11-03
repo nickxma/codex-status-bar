@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.6
+
+- Mirror existing Claude Code hook state from configured SSH hosts, even without an assigned Codex task. Host-scoped session IDs prevent collisions; removed hook files are cleared after successful snapshots. Remote Control hosts still need a separate reachable SSH/reporting route for Claude Code.
+
+- Read the production Codex task catalog when present, with a fallback for development-only installations. A retained development database no longer hides newer local or Remote Control tasks from the menu and activity animation.
+
 ## 0.5.5
 
 - Add a saved Menu bar icon choice: Codex cloud (default) or Claude Code pixel crab. Both support activity animation, Reduce Motion, and the permission badge.
