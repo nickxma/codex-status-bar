@@ -73,7 +73,14 @@ Claude Code activity on configured SSH hosts is collected from the same `~/.clau
 hook files used locally. Each host needs the included Claude lifecycle hooks and a working Node
 runtime. Collection does not install software or modify remote Claude settings. Codex Remote
 Control reports Codex tasks; it does not transport Claude Code hook files. A Remote Control-only
-host therefore needs an additional reachable reporting route before its Claude tasks can appear.
+host needs an SSH route in `~/.codex/statusbar/remote-hosts.json`, for example:
+
+```json
+[{"hostId":"remote-control:YOUR_ENVIRONMENT_ID","alias":"your-ssh-alias","label":"Remote Mac"}]
+```
+
+Only host IDs already configured in Codex are accepted. Offline hosts cannot supply live status;
+Claude authentication errors remain separate from hook transport.
 
 SSH remotes must already support key-based login through their Codex alias. An SSH agent such as
 1Password may require a one-time approval for the status app's connection. Each attempt has a

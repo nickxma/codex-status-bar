@@ -16,6 +16,8 @@ final class RemoteSessionMonitor {
 
     typealias SnapshotProvider = (_ host: Host) -> Data?
 
+    private let remoteHostsURL: URL
+    private var remoteHostsModifiedAt: Date?
     private let globalStateURL: URL
     private let stateRoot: URL
     private let customSnapshotProvider: SnapshotProvider?
@@ -39,11 +41,13 @@ final class RemoteSessionMonitor {
     init(
         globalStateURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/.codex-global-state.json"),
+        remoteHostsURL: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/statusbar/remote-hosts.json"),
         stateRoot: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/statusbar/state.d", isDirectory: true),
         pollInterval: TimeInterval = 5,
         snapshotProvider: SnapshotProvider? = nil
     ) {
+        self.remoteHostsURL = remoteHostsURL
         self.globalStateURL = globalStateURL
         self.stateRoot = stateRoot
         self.pollInterval = pollInterval
@@ -113,7 +117,8 @@ final class RemoteSessionMonitor {
             configurationSize = nil
             return cachedConfiguration
         }
-        if configurationModifiedAt == modifiedAt, configurationSize == size {
+        let mappingDate = (try? FileManager.default.attributesOfItem(atPath: remoteHostsURL.path))?[.modificationDate] as? Date
+        if configurationModifiedAt == modifiedAt, configurationSize == size, remoteHostsModifiedAt == mappingDate {
             return cachedConfiguration
         }
         guard let data = try? Data(contentsOf: globalStateURL),
@@ -131,6 +136,22 @@ final class RemoteSessionMonitor {
                 hosts.append(Host(id: id, alias: alias, label: label))
             }
         }
+
+        // Remote Control carries Codex status, but Claude hook files need an SSH route.
+        // Accept explicit mappings only for hosts already configured in Codex.
+        let configuredIDs = Set((root["remote-projects"] as? [[String: Any]] ?? []).compactMap { $0["hostId"] as? String })
+            .union(hosts.map(\.id))
+        if let data = try? Data(contentsOf: remoteHostsURL),
+           let mappings = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
+            for mapping in mappings {
+                guard let id = mapping["hostId"], configuredIDs.contains(id),
+                      let alias = mapping["alias"], !alias.isEmpty, !alias.hasPrefix("-"),
+                      alias.allSatisfy({ $0.isLetter || $0.isNumber || "._-@".contains($0) }),
+                      !hosts.contains(where: { $0.id == id || $0.alias == alias }) else { continue }
+                hosts.append(Host(id: id, alias: alias, label: mapping["label"] ?? alias))
+            }
+        }
+        remoteHostsModifiedAt = mappingDate
 
         var assignments: [String: Set<String>] = [:]
         if let rows = root["thread-project-assignments"] as? [String: Any] {

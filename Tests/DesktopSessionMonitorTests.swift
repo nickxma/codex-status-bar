@@ -276,15 +276,19 @@ struct DesktopSessionMonitorTests {
         // Remote Claude hooks must be collected even with no assigned Codex task.
         let claudeConfig = root.appendingPathComponent("claude-global.json")
         let claudeStates = root.appendingPathComponent("remote-claude-states")
-        try JSONSerialization.data(withJSONObject: ["codex-managed-remote-connections": [[
-            "hostId": "remote-ssh-discovered:test", "displayName": "Remote Mac", "alias": "test"
+        try JSONSerialization.data(withJSONObject: ["remote-projects": [[
+            "hostId": "remote-control:test", "remotePath": "/remote"
         ]]]).write(to: claudeConfig)
+        let routes = root.appendingPathComponent("remote-hosts.json")
+        try JSONSerialization.data(withJSONObject: [[
+            "hostId": "remote-control:test", "alias": "test", "label": "Remote Mac"
+        ], ["hostId": "unconfigured-host", "alias": "ignored"]]).write(to: routes)
         let claudeLock = NSLock()
         var claudeSnapshot = "__CLAUDE_STATUS_STATES__\n" + String(data: try JSONSerialization.data(withJSONObject: [
             "sessionId": "claude-session", "state": "tool", "project": "example", "pid": 1234,
             "entrypoint": "", "ts": Date().timeIntervalSince1970, "startedAt": Date().timeIntervalSince1970 - 5
         ]), encoding: .utf8)! + "\n"
-        let claudeRemote = RemoteSessionMonitor(globalStateURL: claudeConfig, stateRoot: claudeStates,
+        let claudeRemote = RemoteSessionMonitor(globalStateURL: claudeConfig, remoteHostsURL: routes, stateRoot: claudeStates,
             pollInterval: 0, snapshotProvider: { _ in
                 claudeLock.lock(); defer { claudeLock.unlock() }
                 return Data(claudeSnapshot.utf8)
