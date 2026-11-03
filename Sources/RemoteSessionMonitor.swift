@@ -16,6 +16,8 @@ final class RemoteSessionMonitor {
 
     typealias SnapshotProvider = (_ host: Host) -> Data?
 
+    private let remoteHostsURL: URL
+    private var remoteHostsModifiedAt: Date?
     private let globalStateURL: URL
     private let stateRoot: URL
     private let customSnapshotProvider: SnapshotProvider?
@@ -39,11 +41,13 @@ final class RemoteSessionMonitor {
     init(
         globalStateURL: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/.codex-global-state.json"),
+        remoteHostsURL: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/statusbar/remote-hosts.json"),
         stateRoot: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/statusbar/state.d", isDirectory: true),
         pollInterval: TimeInterval = 5,
         snapshotProvider: SnapshotProvider? = nil
     ) {
+        self.remoteHostsURL = remoteHostsURL
         self.globalStateURL = globalStateURL
         self.stateRoot = stateRoot
         self.pollInterval = pollInterval
@@ -71,7 +75,6 @@ final class RemoteSessionMonitor {
             let configuration = self.loadConfiguration()
             for host in configuration.hosts {
                 let assignedThreadIDs = configuration.assignments[host.id] ?? []
-                guard !assignedThreadIDs.isEmpty else { continue }
                 guard now >= self.retryAfter[host.id, default: 0] else { continue }
                 let snapshot: Data?
                 if let provider = self.customSnapshotProvider {
@@ -114,7 +117,8 @@ final class RemoteSessionMonitor {
             configurationSize = nil
             return cachedConfiguration
         }
-        if configurationModifiedAt == modifiedAt, configurationSize == size {
+        let mappingDate = (try? FileManager.default.attributesOfItem(atPath: remoteHostsURL.path))?[.modificationDate] as? Date
+        if configurationModifiedAt == modifiedAt, configurationSize == size, remoteHostsModifiedAt == mappingDate {
             return cachedConfiguration
         }
         guard let data = try? Data(contentsOf: globalStateURL),
@@ -132,6 +136,22 @@ final class RemoteSessionMonitor {
                 hosts.append(Host(id: id, alias: alias, label: label))
             }
         }
+
+        // Remote Control carries Codex status, but Claude hook files need an SSH route.
+        // Accept explicit mappings only for hosts already configured in Codex.
+        let configuredIDs = Set((root["remote-projects"] as? [[String: Any]] ?? []).compactMap { $0["hostId"] as? String })
+            .union(hosts.map(\.id))
+        if let data = try? Data(contentsOf: remoteHostsURL),
+           let mappings = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] {
+            for mapping in mappings {
+                guard let id = mapping["hostId"], configuredIDs.contains(id),
+                      let alias = mapping["alias"], !alias.isEmpty, !alias.hasPrefix("-"),
+                      alias.allSatisfy({ $0.isLetter || $0.isNumber || "._-@".contains($0) }),
+                      !hosts.contains(where: { $0.id == id || $0.alias == alias }) else { continue }
+                hosts.append(Host(id: id, alias: alias, label: mapping["label"] ?? alias))
+            }
+        }
+        remoteHostsModifiedAt = mappingDate
 
         var assignments: [String: Set<String>] = [:]
         if let rows = root["thread-project-assignments"] as? [String: Any] {
@@ -153,7 +173,7 @@ final class RemoteSessionMonitor {
         let controlRoot = fm.homeDirectoryForCurrentUser.appendingPathComponent(".codex/statusbar/ssh", isDirectory: true)
         try? fm.createDirectory(at: controlRoot, withIntermediateDirectories: true)
         let controlPath = controlRoot.appendingPathComponent("%C").path
-        let command = #"root="${CODEX_HOME:-$HOME/.codex}"; printf '__CODEX_STATUS_INDEX__\n'; tail -n 2000 "$root/session_index.jsonl" 2>/dev/null || true; printf '__CODEX_STATUS_SESSIONS__\n'; find "$root/sessions" -type f -name 'rollout-*.jsonl' -mmin -35 -print 2>/dev/null | while IFS= read -r f; do printf '__CODEX_STATUS_FILE__%s\n' "$f"; grep -E '"type":"session_meta"|"type":"(task_started|task_complete|task_cancelled|turn_aborted)"' "$f" 2>/dev/null | tail -n 24; done"#
+        let command = #"root="${CODEX_HOME:-$HOME/.codex}"; printf '__CODEX_STATUS_INDEX__\n'; tail -n 2000 "$root/session_index.jsonl" 2>/dev/null || true; printf '__CODEX_STATUS_SESSIONS__\n'; find "$root/sessions" -type f -name 'rollout-*.jsonl' -mmin -35 -print 2>/dev/null | while IFS= read -r f; do printf '__CODEX_STATUS_FILE__%s\n' "$f"; grep -E '"type":"session_meta"|"type":"(task_started|task_complete|task_cancelled|turn_aborted)"' "$f" 2>/dev/null | tail -n 24; done; printf '__CLAUDE_STATUS_STATES__\n'; find "$HOME/.claude/statusbar/state.d" -type f -name '*.json' -mmin -35 -exec cat {} \; -exec printf '\n' \; 2>/dev/null || true"#
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
@@ -221,6 +241,8 @@ final class RemoteSessionMonitor {
         let text = String(decoding: data, as: UTF8.self)
         var titles: [String: String] = [:]
         var cursor: Cursor?
+        var readingClaude = false
+        var seenClaudeIDs = Set<String>()
 
         func finish(_ candidate: Cursor?) {
             guard let candidate, !candidate.id.isEmpty, !candidate.state.isEmpty,
@@ -230,6 +252,16 @@ final class RemoteSessionMonitor {
 
         for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(rawLine)
+            if line == "__CLAUDE_STATUS_STATES__" {
+                finish(cursor); cursor = nil; readingClaude = true
+                continue
+            }
+            if readingClaude {
+                if let object = parse(line), let id = mirrorClaudeState(object, host: host) {
+                    seenClaudeIDs.insert(id)
+                }
+                continue
+            }
             if line == "__CODEX_STATUS_INDEX__" || line == "__CODEX_STATUS_SESSIONS__" { continue }
             if line.hasPrefix("__CODEX_STATUS_FILE__") {
                 finish(cursor)
@@ -278,6 +310,42 @@ final class RemoteSessionMonitor {
             cursor = current
         }
         finish(cursor)
+        // Only a successful complete snapshot can remove vanished remote hook files.
+        if readingClaude {
+            let prefix = claudeStatePrefix(host)
+            for file in (try? FileManager.default.contentsOfDirectory(atPath: stateRoot.path)) ?? []
+                where file.hasPrefix(prefix) && file.hasSuffix(".json") {
+                let id = String(file.dropLast(5))
+                if !seenClaudeIDs.contains(id) {
+                    try? FileManager.default.removeItem(at: stateRoot.appendingPathComponent(file))
+                }
+            }
+        }
+    }
+
+    private func claudeStatePrefix(_ host: Host) -> String {
+        // Encode instead of replacing punctuation to avoid collisions between hosts.
+        "remote-claude-" + host.id.utf8.map { String(format: "%02x", $0) }.joined() + "-"
+    }
+
+    private func mirrorClaudeState(_ object: [String: Any], host: Host) -> String? {
+        guard let session = object["sessionId"] as? String, !session.isEmpty,
+              let state = object["state"] as? String,
+              ["thinking", "tool", "subagent", "permission", "done", "idle"].contains(state),
+              let timestamp = object["ts"] as? Double,
+              timestamp <= Date().timeIntervalSince1970 + 60,
+              Date().timeIntervalSince1970 - timestamp <= StatusPolicy.activeInactivityTimeout else { return nil }
+        let id = claudeStatePrefix(host) + session.utf8.map { String(format: "%02x", $0) }.joined()
+        let project = object["project"] as? String ?? "Claude Code"
+        let payload: [String: Any] = [
+            "sessionId": id, "state": state, "label": object["label"] as? String ?? "",
+            "project": "\(host.label) · \(project)", "remoteHost": host.label,
+            "cwd": object["cwd"] as? String ?? "", "entrypoint": "cli",
+            "term_program": "", "pid": 0, "started": true,
+            "startedAt": object["startedAt"] as? Double ?? 0, "ts": timestamp,
+        ]
+        write(payload, sessionID: id)
+        return id
     }
 
     private func makeState(_ cursor: Cursor, host: Host, state: String, label: String,
